@@ -100,6 +100,10 @@
   .sa-grid .btn-outline{ width:100%; justify-content:center; }
 
   .mobile-topbar{ display:none; }
+  @media (min-width: 881px){
+    .sidebar{ position:sticky; top:0; align-self:flex-start; height:100vh; height:100dvh; overflow-y:auto; overflow-x:hidden; }
+    .sidebar > *{ flex-shrink:0; }
+  }
 
   .field-grid{
     background:white; border:1px solid var(--line); border-radius:8px; padding:16px 20px;
@@ -411,6 +415,22 @@ var DEFAULT_SESSIONS = [
   {id:"d10b", month:"มกราคม", day:"10", hours:1, holiday:false, note:""}
 ];
 
+/* ---- ค่าเริ่มต้นหน้าปก (ใช้กับบัญชี/ข้อมูลที่สร้างใหม่) แก้ข้อความตรงนี้ได้ ---- */
+var DEFAULT_SCHOOL_INFO = {
+  schoolName:"โรงเรียนเทศบาล ๑ วัดต้นสน",
+  district:"เมืองอ่างทอง",
+  province:"อ่างทอง",
+  affiliation:"เทศบาลเมืองอ่างทอง",
+  director:"นางสาวทัศนีย์  เมืองงาม"   /* ผู้อำนวยการโรงเรียน */
+};
+/* ปีการศึกษา (พ.ศ.) ตามวันที่ในเครื่อง: ปีการศึกษาไทยเริ่มราวเดือนพฤษภาคม
+   ดังนั้น ม.ค.-เม.ย. ยังนับเป็นปีการศึกษาของปีก่อนหน้า */
+function currentAcademicYearBE(){
+  var d = new Date();
+  var be = d.getFullYear() + 543;
+  return String(d.getMonth() < 4 ? be - 1 : be);
+}
+
 function uid(prefix){ return (prefix||"id") + "_" + Math.random().toString(36).slice(2,9) + Date.now().toString(36).slice(-4); }
 function emptyItemScores(items){ var o={}; items.forEach(function(it){ o[it.id]=""; }); return o; }
 function emptyAttendance(sessions){ var o={}; sessions.forEach(function(s){ o[s.id]="present"; }); return o; }
@@ -460,10 +480,10 @@ function newSampleSubject(){
   };
 }
 function defaultDB(){
-  var s = newSampleSubject();
+  var s = newEmptySubject("วิชาใหม่");
   var subjects = {}; subjects[s.id] = s;
   return {
-    schoolInfo:{ schoolName:"", district:"", province:"", affiliation:"", director:"", deputyDirector:"", academicYear:"2568", logoDataUrl:"" },
+    schoolInfo:{ schoolName:DEFAULT_SCHOOL_INFO.schoolName, district:DEFAULT_SCHOOL_INFO.district, province:DEFAULT_SCHOOL_INFO.province, affiliation:DEFAULT_SCHOOL_INFO.affiliation, director:DEFAULT_SCHOOL_INFO.director, deputyDirector:"", academicYear:currentAcademicYearBE(), logoDataUrl:"" },
     subjects: subjects,
     order: [s.id],
     currentId: s.id,
@@ -1297,6 +1317,30 @@ function clearAllAttendance(){
   UI.attPasteUndo = null;
   scheduleSave(); flushSaveNow(); rerender();
 }
+/* ล้างคะแนนในหน้าคะแนน (คะแนนหลัก / คุณลักษณะฯ / อ่าน เขียน คิดวิเคราะห์) — เก็บรายชื่อ โครงสร้าง และสถานะ ย้าย/มส ไว้ ล้างเฉพาะค่าคะแนน */
+function clearScores(kind){
+  var s = getSubj();
+  if (!s.students.length){ window.alert("ยังไม่มีรายชื่อนักเรียนให้ล้างคะแนน"); return; }
+  var label = kind === "desirable" ? "คุณลักษณะอันพึงประสงค์"
+            : kind === "readWrite" ? "การอ่าน เขียน คิดวิเคราะห์"
+            : "คะแนน (คะแนนเก็บ / สอบกลางภาค / สอบปลายภาค / แก้ตัว)";
+  if (!window.confirm("ล้างคะแนน" + label + "ของนักเรียนทุกคน (" + s.students.length + " คน)?\n\nรายชื่อนักเรียนและโครงสร้างรายวิชายังอยู่ครบ ล้างเฉพาะตัวเลขคะแนน\n\n(ถ้าพลาด กด Ctrl+Z เพื่อย้อนกลับได้)")) return;
+  s.students.forEach(function(st){
+    if (kind === "desirable"){
+      s.desirableScores[st.id] = emptyItemScores(s.desirable);
+    } else if (kind === "readWrite"){
+      s.readWriteScores[st.id] = emptyItemScores(s.readWrite);
+    } else {
+      var cur = s.scores[st.id] || {};
+      cur.items = emptyItemScores(s.structure);
+      cur.makeup = "";
+      cur.makeupMid = "";
+      s.scores[st.id] = cur;
+    }
+  });
+  UI.scorePasteUndo = null;
+  scheduleSave(); flushSaveNow(); rerender();
+}
 function deleteAllSessions(){
   var s = getSubj();
   if (!s.sessions.length){ window.alert("ยังไม่มีวันเรียนในตาราง"); return; }
@@ -1646,8 +1690,8 @@ function applyFillTarget(el, value){
       var dr = p.r > n.hiR ? p.r - n.hiR : (p.r < n.loR ? p.r - n.loR : 0);
       var dc = p.c > n.hiC ? p.c - n.hiC : (p.c < n.loC ? p.c - n.loC : 0);
       if (dr || dc){
-        if (Math.abs(dr) >= Math.abs(dc)) prev = { loR:Math.min(n.loR, p.r), hiR:Math.max(n.hiR, p.r), loC:n.loC, hiC:n.hiC };
-        else prev = { loR:n.loR, hiR:n.hiR, loC:Math.min(n.loC, p.c), hiC:Math.max(n.hiC, p.c) };
+        /* ลากเฉียงได้: ขยายช่วงเป็นสี่เหลี่ยมครอบทั้งช่วงเดิมและช่องที่เมาส์ชี้อยู่ */
+        prev = { loR:Math.min(n.loR, p.r), hiR:Math.max(n.hiR, p.r), loC:Math.min(n.loC, p.c), hiC:Math.max(n.hiC, p.c) };
       }
       fillEnd = prev; paint(prev);
       return;
@@ -5012,6 +5056,7 @@ function renderScores(s, comp){
   '</thead><tbody>'+bodyRows+'</tbody></table></div>' +
   '<div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; align-items:center;">' +
     '<button class="btn-outline" onclick="openScorePasteImport(\'structure\')">'+icon("upload",15)+' วางคะแนนจาก Excel</button>' +
+    '<button class="btn-outline" style="border-color:#B3432E; color:#B3432E;" onclick="clearScores(\'scores\')">'+icon("trash",15,"#B3432E")+' ล้างคะแนนทั้งหมด</button>' +
     renderScorePasteUndoInline("structure") +
   '</div>' +
   scorePasteImportBlock(s, "structure") +
@@ -5057,6 +5102,7 @@ function renderDesirable(s, comp){
   '</tr></thead><tbody>'+bodyRows+'</tbody></table></div>' +
   '<div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; align-items:center;">' +
     '<button class="btn-outline" onclick="openScorePasteImport(\'desirable\')">'+icon("upload",15)+' วางคะแนนจาก Excel</button>' +
+    '<button class="btn-outline" style="border-color:#B3432E; color:#B3432E;" onclick="clearScores(\'desirable\')">'+icon("trash",15,"#B3432E")+' ล้างคะแนนทั้งหมด</button>' +
     renderScorePasteUndoInline("desirable") +
   '</div>' +
   scorePasteImportBlock(s, "desirable");
@@ -5106,6 +5152,7 @@ function renderReadWrite(s, comp){
   '<div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; align-items:center;">' +
     '<button class="btn-outline" onclick="addReadWriteItem()">'+icon("plus",15)+' เพิ่มรายการประเมิน</button>' +
     '<button class="btn-outline" onclick="openScorePasteImport(\'readWrite\')">'+icon("upload",15)+' วางคะแนนจาก Excel</button>' +
+    '<button class="btn-outline" style="border-color:#B3432E; color:#B3432E;" onclick="clearScores(\'readWrite\')">'+icon("trash",15,"#B3432E")+' ล้างคะแนนทั้งหมด</button>' +
     renderScorePasteUndoInline("readWrite") +
   '</div>' + countWarning +
   scorePasteImportBlock(s, "readWrite");
