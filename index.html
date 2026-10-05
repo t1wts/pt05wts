@@ -6995,7 +6995,7 @@ function dsAttSessions(s, comp, id){
 }
 
 function dsScores(s, comp, id){
-  var gp = O(id, "groupPrefix", false), showMax = O(id, "showMax", true);
+  var gp = O(id, "groupPrefix", false), showMax = O(id, "showMax", true), showDesc = O(id, "showDesc", true), showWord = O(id, "showWord", true);
   var before = s.structure.filter(function(it){ return it.type === "collect" && (it.period || "before") === "before"; });
   var after = s.structure.filter(function(it){ return it.type === "collect" && it.period === "after"; });
   var mid = s.structure.filter(function(it){ return it.type === "exam" && (it.period || "midterm") === "midterm"; });
@@ -7004,7 +7004,9 @@ function dsScores(s, comp, id){
   function addItems(items, groupLabel){
     items.forEach(function(it){
       var showsBar = it.type === "collect" || examItemNeedsIndicatorBar(it, items);
-      var base = structureItemLabelInGroup(it, items) + ((showsBar && it.name) ? (" " + it.name) : "");
+      var lead = structureItemLabelInGroup(it, items);
+      if (!showWord && showsBar){ var numOnly = lead.replace(/^ตัวชี้วัด\s*/, ""); if (numOnly) lead = numOnly; }
+      var base = lead + ((showDesc && showsBar && it.name) ? ((lead ? " " : "") + it.name) : "");
       var label = ((gp && base.indexOf(groupLabel) !== 0) ? (groupLabel + " ") : "") + base + (showMax ? (" (เต็ม " + it.max + ")") : "");
       cols.push({
         key:"it:" + it.id, label:label, group:groupLabel, def:true,
@@ -7046,6 +7048,9 @@ function dsScores(s, comp, id){
   return {
     studentRows:true, cols:cols, rows:comp.rows,
     opts:[
+      { key:"showDesc", type:"choice", def:true, label:"หัวคอลัมน์ตัวชี้วัด",
+        choices:[[true,"มีคำอธิบายตัวชี้วัด เช่น ตัวชี้วัด 1 อธิบายการอ่าน"],[false,"ไม่มีคำอธิบาย (เฉพาะ ตัวชี้วัด 1, ตัวชี้วัด 2 …)"]] },
+      { key:"showWord", type:"check", def:true, label:"ใส่คำว่า \"ตัวชี้วัด\" นำหน้าเลข (ถ้าไม่ติ๊ก จะเหลือแค่เลข เช่น 1, 2.1)" },
       { key:"showMax", type:"check", def:true, label:"ใส่คะแนนเต็มต่อท้ายหัวคอลัมน์ เช่น (เต็ม 20)" },
       { key:"groupPrefix", type:"check", def:false, label:"ใส่ชื่อกลุ่มนำหน้าหัวคอลัมน์ เช่น ก่อนกลางภาค ตัวชี้วัด 1" }
     ]
@@ -7353,6 +7358,12 @@ function optHtml(ds, o){
   var v = O(ds.id, o.key, o.def);
   if (o.type === "check"){
     return '<label class="cp-opt"><input type="checkbox" ' + (v ? 'checked' : '') + ' onchange="PTCOPY.opt(\'' + o.key + '\', this.checked)"/> ' + esc(o.label) + '</label>';
+  }
+  if (o.type === "choice"){
+    return '<span class="cp-opt">' + esc(o.label) + ': ' + o.choices.map(function(ch){
+      var on = String(v) === String(ch[0]);
+      return '<button class="' + (on ? 'btn-solid' : 'btn-outline') + '" style="padding:4px 10px; margin-left:6px;" onclick="PTCOPY.opt(\'' + o.key + '\', ' + (ch[0] ? 'true' : 'false') + ')">' + (on ? '✓ ' : '') + esc(ch[1]) + '</button>';
+    }).join("") + '</span>';
   }
   var options = o.choices.map(function(ch){
     return '<option value="' + esc(ch[0]) + '" ' + (String(v) === String(ch[0]) ? 'selected' : '') + '>' + esc(ch[1]) + '</option>';
