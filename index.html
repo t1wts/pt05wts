@@ -1558,6 +1558,434 @@ function onLevelInput(el, kind, studentId, itemId, rowIndex, colIndex, numCols){
   else updateReadWriteScore(studentId, itemId, cleaned);
   if (cleaned.length === 1) advanceGridCursor(rowIndex, colIndex, numCols);
 }
+/* ===== โหมดกรอกคะแนนแบบ Excel (ช่องคะแนนทุกหน้า) =====
+   - คลิก/เลื่อนไปช่องไหน = เลือกทั้งช่อง (ไม่มีเคอร์เซอร์กระพริบ) พิมพ์เลขแล้วทับค่าเดิมทันที
+   - ลูกศร ↑ ↓ ← → เลื่อนไปช่องข้างเคียงทันที ไม่ต้องไล่ผ่านตัวอักษรทีละตัว
+   - Enter = ลงช่องล่าง · ดับเบิลคลิก หรือกด F2 = เข้าโหมดแก้ละเอียด (มีเคอร์เซอร์ ลูกศรเลื่อนในตัวเลขได้) · Esc/Enter = ออกจากโหมดแก้ */
+(function(){
+  var st = document.createElement("style");
+  st.textContent =
+    'input[data-studentid][type="text"]:not(.xl-edit){caret-color:transparent;cursor:cell;}' +
+    'input[data-studentid][type="text"]:not(.xl-edit)::selection{background:transparent;color:inherit;}' +
+    'input[data-studentid][type="text"]:focus:not(.xl-edit){outline:2px solid #217346;outline-offset:-1px;}' +
+    'input[data-studentid][type="text"].xl-edit{outline:2px solid #1a73e8;outline-offset:-1px;cursor:text;}';
+  document.head.appendChild(st);
+
+  var editId = null; /* id ของช่องที่อยู่ในโหมดแก้ละเอียด (จำไว้เพราะหน้าถูกวาดใหม่ทุกครั้งที่พิมพ์) */
+  function isScoreCell(el){
+    return !!(el && el.tagName === "INPUT" && el.type === "text" && el.hasAttribute("data-studentid"));
+  }
+  function isEditing(el){ return !!editId && el.id === editId; }
+  function moveTo(row, col, dRow, dCol){
+    while (true){
+      var el = document.querySelector('input[data-studentid][data-srow="'+row+'"][data-scol="'+col+'"]');
+      if (!el) return false;
+      if (el.disabled){ row += dRow; col += dCol; continue; }
+      el.focus();
+      return true;
+    }
+  }
+
+  document.addEventListener("focusin", function(ev){
+    var el = ev.target;
+    if (!isScoreCell(el)) return;
+    if (editId && el.id !== editId) editId = null;
+    if (isEditing(el)){ el.classList.add("xl-edit"); return; }
+    el.select();
+  });
+  document.addEventListener("focusout", function(ev){
+    var el = ev.target;
+    if (!isScoreCell(el)) return;
+    /* ถ้าแค่ถูกวาดใหม่ ช่องเดิมจะได้โฟกัสกลับมาเอง; ถ้าโฟกัสไปที่อื่นจริง focusin ของช่องอื่นจะล้างโหมดแก้ให้ */
+  });
+  document.addEventListener("mouseup", function(ev){
+    var el = ev.target;
+    if (!isScoreCell(el) || isEditing(el)) return;
+    setTimeout(function(){ if (document.activeElement === el && !isEditing(el)) el.select(); }, 0);
+  });
+  document.addEventListener("dblclick", function(ev){
+    var el = ev.target;
+    if (!isScoreCell(el) || el.disabled) return;
+    editId = el.id;
+    el.classList.add("xl-edit");
+    var n = el.value.length;
+    try { el.setSelectionRange(n, n); } catch(e){}
+  });
+  /* capture: ทำงานก่อนตัวจัดการลูกศรเดิม แต่ไม่แตะ Shift+ลูกศร (ใช้เลือกช่วงช่อง) และ Ctrl/Cmd */
+  document.addEventListener("keydown", function(ev){
+    var el = ev.target;
+    if (!isScoreCell(el) || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    var key = ev.key, editing = isEditing(el);
+    var row = parseInt(el.getAttribute("data-srow"), 10), col = parseInt(el.getAttribute("data-scol"), 10);
+    if (isNaN(row) || isNaN(col)) return;
+
+    if (key === "F2"){
+      ev.preventDefault();
+      editId = el.id; el.classList.add("xl-edit");
+      var n = el.value.length; try { el.setSelectionRange(n, n); } catch(e){}
+      return;
+    }
+    if (editing){
+      if (key === "Escape"){ ev.preventDefault(); editId = null; el.classList.remove("xl-edit"); el.select(); return; }
+      if (key === "Enter"){ ev.preventDefault(); editId = null; el.classList.remove("xl-edit"); moveTo(row + 1, col, 1, 0); return; }
+      return; /* โหมดแก้ละเอียด: ปล่อยให้ลูกศรเลื่อนในตัวอักษรตามปกติ (ขอบซ้าย/ขวาจะข้ามช่องเหมือนเดิม) */
+    }
+    if (ev.shiftKey) return;
+    var d = { ArrowUp:[-1,0], ArrowDown:[1,0], ArrowLeft:[0,-1], ArrowRight:[0,1] }[key];
+    if (d){
+      ev.preventDefault(); ev.stopPropagation();
+      moveTo(row + d[0], col + d[1], d[0], d[1]);
+      return;
+    }
+    /* ช่องคะแนนคุณลักษณะฯ/อ่านเขียนมี Enter ของตัวเอง (เลื่อนไปช่องถัดไปตามลำดับ) จึงไม่ทับ */
+    if (key === "Enter" && !el.hasAttribute("data-kind")){
+      ev.preventDefault();
+      moveTo(row + 1, col, 1, 0);
+    }
+  }, true);
+})();
+/* ===== วางคะแนนแบบ Excel: คัดลอกตารางจาก Excel/Google Sheets/โปรแกรมอื่น แล้ววาง (Ctrl+V) ที่ช่องคะแนนช่องแรกที่ต้องการ
+   จะเติมลงมาตามจำนวนแถว/คอลัมน์ที่คัดลอกมาเลย · ถ้าคัดลอกมาช่องเดียวแล้ววางตอนเลือกหลายช่อง จะเติมทุกช่องที่เลือก
+   ข้ามช่องของนักเรียน ย้าย/มส และข้ามค่าที่ไม่ใช่ตัวเลข ---- */
+(function(){
+  function isScoreCell(el){
+    return !!(el && el.tagName === "INPUT" && el.type === "text" && el.hasAttribute("data-studentid"));
+  }
+  function toast(msg){
+    var t = document.getElementById("xlPasteToast");
+    if (!t){
+      t = document.createElement("div");
+      t.id = "xlPasteToast";
+      t.style.cssText = "position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#217346;color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;z-index:99999;box-shadow:0 4px 14px rgba(0,0,0,.25);transition:opacity .3s;max-width:90vw;text-align:center;";
+      document.body.appendChild(t);
+    }
+    t.textContent = msg; t.style.opacity = "1";
+    clearTimeout(t._h); t._h = setTimeout(function(){ t.style.opacity = "0"; }, 3500);
+  }
+  function parseClip(text){
+    text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    var rows = text.split("\n");
+    while (rows.length > 1 && rows[rows.length-1] === "") rows.pop(); /* Excel ใส่บรรทัดว่างท้ายข้อมูลเสมอ */
+    return rows.map(function(r){
+      return r.split("\t").map(function(c){
+        c = c.trim();
+        if (c.length > 1 && c.charAt(0) === '"' && c.charAt(c.length-1) === '"') c = c.slice(1, -1);
+        return c.trim();
+      });
+    });
+  }
+  function cellAt(r, c){ return document.querySelector('input[data-studentid][data-srow="'+r+'"][data-scol="'+c+'"]'); }
+  function validFor(el, v){
+    if (v === "") return true;
+    var kind = el.getAttribute("data-kind");
+    if (kind === "desirable" || kind === "readWrite") return /^[0-3]$/.test(v);
+    return /^\d*\.?\d+$|^\d+\.$/.test(v);
+  }
+  function setCell(el, v){
+    var kind = el.getAttribute("data-kind");
+    var sid = el.getAttribute("data-studentid"), iid = el.getAttribute("data-itemid");
+    var s = getSubj();
+    if (isScoreBlocked(s, sid)) return false;
+    if (kind === "desirable" || kind === "readWrite"){
+      if (v !== "" && !/^[0-3]$/.test(v)) return false;
+      var map = kind === "desirable" ? s.desirableScores : s.readWriteScores;
+      if (!map[sid]) map[sid] = {};
+      map[sid][iid] = v;
+      return true;
+    }
+    if (v !== "" && !/^\d*\.?\d+$|^\d+\.$/.test(v)) return false;
+    applyFillTarget(el, v);
+    return true;
+  }
+
+  document.addEventListener("paste", function(ev){
+    var el = ev.target;
+    if (!isScoreCell(el) || el.disabled) return;
+    var cd = ev.clipboardData || window.clipboardData;
+    var text = cd ? cd.getData("text") : "";
+    if (!text) return;
+    var grid = parseClip(text);
+    var single = grid.length === 1 && grid[0].length === 1;
+    /* ช่องเดียว + กำลังแก้ละเอียดอยู่ → วางตามปกติลงในช่อง */
+    if (single && el.classList.contains("xl-edit")) return;
+
+    ev.preventDefault();
+    var r0 = parseInt(el.getAttribute("data-srow"), 10), c0 = parseInt(el.getAttribute("data-scol"), 10);
+    var ok = 0, skipped = 0, cut = 0;
+
+    var selected = Array.prototype.slice.call(document.querySelectorAll("input.fill-cell-sel"));
+    if (single && selected.length > 1){
+      /* วางค่าเดียวทับทุกช่องที่เลือก เหมือน Excel */
+      selected.forEach(function(c){ if (c.disabled) return; if (setCell(c, grid[0][0])) ok++; else skipped++; });
+    } else {
+      if (selected.length > 1){
+        r0 = Math.min.apply(null, selected.map(function(c){ return parseInt(c.getAttribute("data-srow"), 10); }));
+        c0 = Math.min.apply(null, selected.map(function(c){ return parseInt(c.getAttribute("data-scol"), 10); }));
+      }
+      /* ตรวจก่อนวาง: เกินตาราง / ไม่ครบทุกแถว / มีค่าที่ไม่ใช่คะแนนที่ถูกต้อง → ถามยืนยันก่อน ถ้ากดยกเลิกจะไม่เปลี่ยนอะไรเลย */
+      var allRows = Array.prototype.map.call(document.querySelectorAll("input[data-studentid]"), function(c){ return parseInt(c.getAttribute("data-srow"), 10); }).filter(function(n){ return !isNaN(n); });
+      var maxRow = Math.max.apply(null, allRows);
+      var rowsAvail = maxRow - r0 + 1;
+      var overCells = 0, badCells = 0, overRows = Math.max(0, grid.length - rowsAvail);
+      var maxColsPasted = 0;
+      grid.forEach(function(row, i){
+        if (row.length > maxColsPasted) maxColsPasted = row.length;
+        row.forEach(function(val, j){
+          var c = cellAt(r0 + i, c0 + j);
+          if (!c) overCells++;
+          else if (!c.disabled && !validFor(c, val)) badCells++;
+        });
+      });
+      var missingRows = Math.max(0, rowsAvail - grid.length);
+      var warns = [];
+      if (overCells > 0) warns.push("• ข้อมูลที่วางมี " + grid.length + " แถว × " + maxColsPasted + " คอลัมน์ เกินขอบตาราง " + overCells + " ช่อง" + (overRows ? " (เกิน " + overRows + " แถว)" : "") + " — ส่วนที่เกินจะถูกตัดทิ้ง");
+      if (missingRows > 0) warns.push("• ข้อมูลที่วางมีแค่ " + grid.length + " แถว แต่ตารางมีอีก " + rowsAvail + " แถวนับจากช่องที่เลือก — ไม่ครบ " + missingRows + " แถว (แถวที่เหลือจะคงคะแนนเดิมไว้)");
+      if (badCells > 0) warns.push("• มี " + badCells + " ช่องที่ไม่ใช่คะแนนที่ถูกต้อง — จะถูกข้ามไป");
+      if (warns.length){
+        var go = window.confirm("ตรวจพบข้อควรระวังก่อนวางคะแนน:\n\n" + warns.join("\n") + "\n\nต้องการวางต่อหรือไม่?\n(กด ตกลง = วางต่อ · กด ยกเลิก = ไม่เปลี่ยนแปลงอะไร)");
+        if (!go){ toast("ยกเลิกการวางคะแนนแล้ว ไม่มีการเปลี่ยนแปลง"); return; }
+      }
+      grid.forEach(function(row, i){
+        row.forEach(function(val, j){
+          var c = cellAt(r0 + i, c0 + j);
+          if (!c){ cut++; return; }
+          if (c.disabled){ skipped++; return; }
+          if (setCell(c, val)) ok++; else skipped++;
+        });
+      });
+    }
+    if (ok > 0){ scheduleSave(); rerender(); }
+    var msg = "วางคะแนนแล้ว " + ok + " ช่อง";
+    if (skipped) msg += " · ข้าม " + skipped + " ช่อง (ไม่ใช่ตัวเลข/เกินช่วง หรือนักเรียนย้าย/มส)";
+    if (cut) msg += " · " + cut + " ช่องเกินขอบตาราง";
+    if (ok === 0) msg = "วางไม่สำเร็จ: " + (skipped ? "ค่าที่วางไม่ใช่คะแนนที่ถูกต้อง" : "ไม่พบช่องปลายทาง");
+    toast(msg);
+  }, true);
+})();
+/* ===== แท็บเวลาเรียนแบบ Excel =====
+   ตารางบันทึกการมาเรียน: ลูกศรเลื่อนข้ามช่อง (ข้ามคอลัมน์วันหยุด/ช่องหลังวันย้าย) · พิมพ์ ข ส ล ป เพื่อบันทึกทันที · Delete/Backspace = มาเรียน
+     Enter = ลงช่องล่าง · วางจาก Excel (Ctrl+V) เติมตามจำนวนแถว/คอลัมน์ พร้อมถามยืนยันถ้าเกิน/ไม่ครบ · คลิกเพื่อวนสถานะยังใช้ได้เหมือนเดิม
+   ตารางรายการวันเรียน (ช่องวันที่/หมายเหตุ): เลือกทั้งช่อง พิมพ์ทับ ลูกศรเลื่อนทันที ดับเบิลคลิก/F2 = แก้ละเอียด */
+(function(){
+  var st = document.createElement("style");
+  st.textContent =
+    '.att-btn:focus{outline:2px solid #217346;outline-offset:-2px;}' +
+    'input[id^="f_day_"]:not(.xl-edit),input[id^="f_note_"]:not(.xl-edit){caret-color:transparent;cursor:cell;}' +
+    'input[id^="f_day_"]:not(.xl-edit)::selection,input[id^="f_note_"]:not(.xl-edit)::selection{background:transparent;color:inherit;}' +
+    'input[id^="f_day_"]:focus:not(.xl-edit),input[id^="f_note_"]:focus:not(.xl-edit){outline:2px solid #217346;outline-offset:-1px;}' +
+    'input[id^="f_day_"].xl-edit,input[id^="f_note_"].xl-edit{outline:2px solid #1a73e8;outline-offset:-1px;cursor:text;}';
+  document.head.appendChild(st);
+
+  function toast(msg){
+    var t = document.getElementById("xlPasteToast");
+    if (!t){
+      t = document.createElement("div");
+      t.id = "xlPasteToast";
+      t.style.cssText = "position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#217346;color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;z-index:99999;box-shadow:0 4px 14px rgba(0,0,0,.25);transition:opacity .3s;max-width:90vw;text-align:center;";
+      document.body.appendChild(t);
+    }
+    t.textContent = msg; t.style.opacity = "1";
+    clearTimeout(t._h); t._h = setTimeout(function(){ t.style.opacity = "0"; }, 3500);
+  }
+
+  /* ---------- ตารางบันทึกการมาเรียน (ปุ่ม .att-btn) ---------- */
+  function isAtt(el){ return !!(el && el.classList && el.classList.contains("att-btn") && el.hasAttribute("data-att-sid")); }
+  function attAt(r, c){ return document.querySelector('.att-btn[data-srow="'+r+'"][data-scol="'+c+'"]'); }
+  function attBounds(){
+    var all = document.querySelectorAll(".att-btn[data-srow]"), maxR = -1, maxC = -1;
+    for (var i = 0; i < all.length; i++){
+      var r = parseInt(all[i].getAttribute("data-srow"), 10), c = parseInt(all[i].getAttribute("data-scol"), 10);
+      if (r > maxR) maxR = r; if (c > maxC) maxC = c;
+    }
+    return { maxR: maxR, maxC: maxC };
+  }
+  function attMove(r, c, dR, dC){
+    var b = attBounds();
+    while (r >= 0 && c >= 0 && r <= b.maxR && c <= b.maxC){
+      var el = attAt(r, c);
+      if (el){ el.focus(); return true; }
+      r += dR; c += dC; /* ช่องที่ไม่มีปุ่ม = คอลัมน์วันหยุด หรือหลังวันย้าย → ข้ามไปช่องถัดไป */
+    }
+    return false;
+  }
+  function attSet(el, status){
+    var sub = getSubj(), sid = el.getAttribute("data-att-sid"), sess = el.getAttribute("data-att-sess");
+    if (!sub.attendance[sid]) sub.attendance[sid] = {};
+    sub.attendance[sid][sess] = status;
+  }
+  function refocus(r, c){ var el = attAt(r, c); if (el) el.focus(); }
+
+  /* คลิก/Space วนสถานะเหมือนเดิม แต่คืนโฟกัสให้ช่องเดิม เพื่อใช้ลูกศรต่อได้ทันที */
+  var lastClick = null;
+  document.addEventListener("click", function(ev){
+    var b = ev.target && ev.target.closest ? ev.target.closest(".att-btn") : null;
+    if (!b) return;
+    lastClick = { r: parseInt(b.getAttribute("data-srow"), 10), c: parseInt(b.getAttribute("data-scol"), 10) };
+    setTimeout(function(){ lastClick = null; }, 0);
+  }, true);
+  var origCycle = cycleAttendance;
+  cycleAttendance = function(){
+    var pos = lastClick;
+    origCycle.apply(this, arguments);
+    if (pos) refocus(pos.r, pos.c);
+  };
+
+  document.addEventListener("keydown", function(ev){
+    var el = ev.target;
+    if (!isAtt(el) || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    var r = parseInt(el.getAttribute("data-srow"), 10), c = parseInt(el.getAttribute("data-scol"), 10);
+    var key = ev.key;
+    var d = { ArrowUp:[-1,0], ArrowDown:[1,0], ArrowLeft:[0,-1], ArrowRight:[0,1] }[key];
+    if (d){
+      if (ev.shiftKey) return;
+      ev.preventDefault(); ev.stopPropagation();
+      attMove(r + d[0], c + d[1], d[0], d[1]);
+      return;
+    }
+    if (key === "Enter"){
+      ev.preventDefault(); ev.stopPropagation();
+      attMove(r + 1, c, 1, 0);
+      return;
+    }
+    var status = null;
+    if (key === "Delete" || key === "Backspace") status = "present";
+    else if (key.length === 1){
+      status = attPasteNormalizeValue(key);
+      if (status === null){ ev.preventDefault(); return; } /* พิมพ์ตัวอื่นที่ไม่ใช่ ข ส ล ป / - ไม่ทำอะไร */
+    }
+    if (status){
+      ev.preventDefault(); ev.stopPropagation();
+      attSet(el, status);
+      scheduleSave(); rerender(); refocus(r, c);
+    }
+  }, true);
+
+  document.addEventListener("paste", function(ev){
+    var el = ev.target;
+    if (!isAtt(el)) return;
+    var cd = ev.clipboardData || window.clipboardData;
+    var text = cd ? cd.getData("text") : "";
+    if (!text) return;
+    ev.preventDefault();
+    text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    var rows = text.split("\n");
+    while (rows.length > 1 && rows[rows.length-1] === "") rows.pop();
+    var grid = rows.map(function(rw){ return rw.split("\t").map(function(x){ return x.trim(); }); });
+
+    var sub = getSubj();
+    var r0 = parseInt(el.getAttribute("data-srow"), 10), c0 = parseInt(el.getAttribute("data-scol"), 10);
+    /* คอลัมน์ที่วางจะเรียงตามวันเรียนจริง (ข้ามวันหยุดอัตโนมัติ) */
+    var teachCols = [];
+    sub.sessions.forEach(function(x, i){ if (!x.holiday) teachCols.push(i); });
+    var startIdx = teachCols.indexOf(c0);
+    if (startIdx < 0) return;
+    var b = attBounds();
+    var rowsAvail = b.maxR - r0 + 1;
+
+    var over = 0, bad = 0, maxPastedCols = 0;
+    grid.forEach(function(row, i){
+      if (row.length > maxPastedCols) maxPastedCols = row.length;
+      row.forEach(function(v, j){
+        var col = teachCols[startIdx + j];
+        if (r0 + i > b.maxR || col === undefined){ over++; return; }
+        if (v !== "" && attPasteNormalizeValue(v) === null) bad++;
+      });
+    });
+    var missingRows = Math.max(0, rowsAvail - grid.length);
+    var warns = [];
+    if (over > 0) warns.push("• ข้อมูลที่วางมี " + grid.length + " แถว × " + maxPastedCols + " คอลัมน์ เกินขอบตาราง " + over + " ช่อง — ส่วนที่เกินจะถูกตัดทิ้ง");
+    if (missingRows > 0) warns.push("• ข้อมูลที่วางมีแค่ " + grid.length + " แถว แต่ตารางมีอีก " + rowsAvail + " แถวนับจากช่องที่เลือก — ไม่ครบ " + missingRows + " แถว (แถวที่เหลือจะคงค่าเดิมไว้)");
+    if (bad > 0) warns.push("• มี " + bad + " ช่องที่ไม่ใช่สถานะที่ถูกต้อง (ใช้ได้: ข ขาด ส สาย ล ลา ป ป่วย / - มา) — จะถูกข้ามไป");
+    if (warns.length){
+      var go = window.confirm("ตรวจพบข้อควรระวังก่อนวางเวลาเรียน:\n\n" + warns.join("\n") + "\n\nต้องการวางต่อหรือไม่?\n(กด ตกลง = วางต่อ · กด ยกเลิก = ไม่เปลี่ยนแปลงอะไร)");
+      if (!go){ toast("ยกเลิกการวางเวลาเรียนแล้ว ไม่มีการเปลี่ยนแปลง"); return; }
+    }
+
+    var ok = 0, skippedBlocked = 0, skippedTransfer = 0, skippedBad = 0, cut = 0;
+    grid.forEach(function(row, i){
+      row.forEach(function(v, j){
+        var col = teachCols[startIdx + j];
+        if (r0 + i > b.maxR || col === undefined){ cut++; return; }
+        if (v === "") return; /* ช่องว่าง = ข้าม ไม่เปลี่ยนค่าเดิม */
+        var status = attPasteNormalizeValue(v);
+        if (status === null){ skippedBad++; return; }
+        var cell = attAt(r0 + i, col);
+        if (!cell){ skippedTransfer++; return; } /* อยู่หลังวันที่ย้ายออกของนักเรียนคนนั้น */
+        var stu = sub.students.find(function(x){ return x.id === cell.getAttribute("data-att-sid"); });
+        if (stu && stu.resultStatus === "มส"){ skippedBlocked++; return; }
+        attSet(cell, status); ok++;
+      });
+    });
+    if (ok > 0){ scheduleSave(); rerender(); refocus(r0, c0); }
+    var msg = ok > 0 ? "วางเวลาเรียนแล้ว " + ok + " ช่อง" : "วางไม่สำเร็จ: ไม่มีช่องที่วางได้";
+    if (skippedBad) msg += " · ข้าม " + skippedBad + " ช่อง (ค่าไม่ถูกต้อง)";
+    if (skippedBlocked) msg += " · ข้ามนักเรียนสถานะ มส";
+    if (skippedTransfer) msg += " · ข้าม " + skippedTransfer + " ช่อง (หลังวันย้ายออก)";
+    if (cut) msg += " · " + cut + " ช่องเกินขอบตาราง";
+    toast(msg);
+  }, true);
+
+  /* ---------- ตารางรายการวันเรียน (ช่องวันที่ / หมายเหตุ) ---------- */
+  var editSessId = null;
+  function isSessInput(el){
+    return !!(el && el.tagName === "INPUT" && el.type === "text" && el.id && (el.id.indexOf("f_day_") === 0 || el.id.indexOf("f_note_") === 0));
+  }
+  function sessEditing(el){ return !!editSessId && el.id === editSessId; }
+  function sessMove(table, r, c, dR, dC){
+    var cells = table.querySelectorAll("[data-srow][data-scol]");
+    var maxR = -1, maxC = -1;
+    for (var i = 0; i < cells.length; i++){
+      var rr = parseInt(cells[i].getAttribute("data-srow"), 10), cc = parseInt(cells[i].getAttribute("data-scol"), 10);
+      if (rr > maxR) maxR = rr; if (cc > maxC) maxC = cc;
+    }
+    while (r >= 0 && c >= 0 && r <= maxR && c <= maxC){
+      var el = table.querySelector('[data-srow="'+r+'"][data-scol="'+c+'"]');
+      if (el && !el.disabled){ el.focus(); return true; }
+      r += dR; c += dC;
+    }
+    return false;
+  }
+  document.addEventListener("focusin", function(ev){
+    var el = ev.target;
+    if (!isSessInput(el)) return;
+    if (editSessId && el.id !== editSessId) editSessId = null;
+    if (sessEditing(el)){ el.classList.add("xl-edit"); return; }
+    el.select();
+  });
+  document.addEventListener("mouseup", function(ev){
+    var el = ev.target;
+    if (!isSessInput(el) || sessEditing(el)) return;
+    setTimeout(function(){ if (document.activeElement === el && !sessEditing(el)) el.select(); }, 0);
+  });
+  document.addEventListener("dblclick", function(ev){
+    var el = ev.target;
+    if (!isSessInput(el)) return;
+    editSessId = el.id; el.classList.add("xl-edit");
+    var n = el.value.length; try { el.setSelectionRange(n, n); } catch(e){}
+  });
+  document.addEventListener("keydown", function(ev){
+    var el = ev.target;
+    if (!isSessInput(el) || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    var table = el.closest("table");
+    var r = parseInt(el.getAttribute("data-srow"), 10), c = parseInt(el.getAttribute("data-scol"), 10);
+    if (!table || isNaN(r) || isNaN(c)) return;
+    var key = ev.key, editing = sessEditing(el);
+    if (key === "F2"){
+      ev.preventDefault(); editSessId = el.id; el.classList.add("xl-edit");
+      var n = el.value.length; try { el.setSelectionRange(n, n); } catch(e){}
+      return;
+    }
+    if (editing){
+      if (key === "Escape"){ ev.preventDefault(); editSessId = null; el.classList.remove("xl-edit"); el.select(); return; }
+      if (key === "Enter"){ ev.preventDefault(); editSessId = null; el.classList.remove("xl-edit"); sessMove(table, r + 1, c, 1, 0); return; }
+      return;
+    }
+    if (ev.shiftKey) return;
+    var d = { ArrowUp:[-1,0], ArrowDown:[1,0], ArrowLeft:[0,-1], ArrowRight:[0,1] }[key];
+    if (d){ ev.preventDefault(); ev.stopPropagation(); sessMove(table, r + d[0], c + d[1], d[0], d[1]); return; }
+    if (key === "Enter"){ ev.preventDefault(); sessMove(table, r + 1, c, 1, 0); }
+  }, true);
+})();
 /* ตั้งคะแนนเดียวกันให้ทุกคนในคอลัมน์นั้นทันที (เขียนทับของเดิม) ข้ามนักเรียนสถานะ ย้าย/มส ให้อัตโนมัติ */
 function fillColumnScore(kind, itemId, value){
   var s = getSubj();
@@ -3186,7 +3614,7 @@ function renderAttendance(s, comp){
       if (transferIndex !== -1 && colIndex > transferIndex) return '<td style="text-align:center; padding:0; background:#F4F4F4;"></td>';
       var att = s.attendance[r.id][sess.id];
       var style = ATT_STYLE[att];
-      return '<td style="text-align:center; padding:0;"><button class="att-btn" data-srow="'+rowIndex+'" data-scol="'+colIndex+'" onkeydown="handleGridInputKeydown(event)" style="background:'+style.bg+'; color:'+style.color+';" onclick="cycleAttendance(\''+r.id+'\',\''+sess.id+'\')">'+style.label+'</button></td>';
+      return '<td style="text-align:center; padding:0;"><button class="att-btn" data-srow="'+rowIndex+'" data-scol="'+colIndex+'" data-att-sid="'+r.id+'" data-att-sess="'+sess.id+'" onkeydown="handleGridInputKeydown(event)" style="background:'+style.bg+'; color:'+style.color+';" onclick="cycleAttendance(\''+r.id+'\',\''+sess.id+'\')">'+style.label+'</button></td>';
     }).join("");
     var transferSelect = '<select style="width:100%; border:1px solid var(--line); border-radius:4px; padding:3px 2px; font-size:12.5px; background:white;" onchange="updateStudentTransferSession(\''+r.id+'\',this.value)">' +
       '<option value="">- (ไม่ย้าย)</option>' +
@@ -4732,8 +5160,8 @@ function renderYearPrintAreas(){
   var subj1ForAttendance = Object.assign({}, subj1, { subject: subj1.subject + ' (ภาคเรียนที่ ' + (termNumberOnly(subj1.term) || "1") + ')' });
   var subj2ForAttendance = Object.assign({}, subj2, { subject: subj2.subject + ' (ภาคเรียนที่ ' + (termNumberOnly(subj2.term) || "2") + ')' });
 
-  var attendanceChunks1 = Math.max(1, Math.ceil(subj1.sessions.length / ATTENDANCE_CHUNK_SIZE));
-  var attendanceChunks2 = Math.max(1, Math.ceil(subj2.sessions.length / ATTENDANCE_CHUNK_SIZE));
+  var attendanceChunks1 = Math.max(1, attPageCount(subj1));
+  var attendanceChunks2 = Math.max(1, attPageCount(subj2));
   var attStart1 = 2;                             // ปก=ไม่นับเลขหน้า, รายชื่อ=1, เวลาเรียนเทอม1 (ละเอียด) เริ่มที่ 2
   var attStart2 = attStart1 + attendanceChunks1;
   var attSummaryPageNum = attStart2 + attendanceChunks2;  // หน้ารวมเวลาเรียน 2 เทอม อยู่หลังเวลาเรียนภาค 2
@@ -4964,7 +5392,7 @@ function renderPrintAreas(s, comp){
   }).join(" · ");
   var holidayDesc = s.sessions.filter(function(x){return x.holiday;}).map(function(x){ return esc(x.day)+' '+esc(x.month)+(x.note?(' ('+esc(x.note)+')'):''); }).join(", ");
 
-  var attendanceChunks = Math.max(1, Math.ceil(s.sessions.length / ATTENDANCE_CHUNK_SIZE));
+  var attendanceChunks = Math.max(1, attPageCount(s));
   var scoresStartPageNum = 2 + attendanceChunks;   // roster=1, attendance=2..(1+attendanceChunks)
   var structurePageNum = scoresStartPageNum + 5;    // after the 5 score sub-pages (ก่อน/หลังกลางภาค, สอบ, คุณลักษณะ+อ่านฯ, คะแนนรวม)
   var summaryPageNum = structurePageNum + 1;
@@ -5455,75 +5883,122 @@ function renderRosterPrintPage(s, info, pageNum){
   '</div>';
 }
 
+var ATT_WEEKS_PER_PAGE = 5;
+var ATT_MIN_WEEKS_LAST_PAGE = 4;
+var ATT_SLOTS_PER_WEEK = 6;
+var ATT_BLANK = { blank:true };   // ช่องของ "สัปดาห์ว่าง" ที่เติมให้หน้าสุดท้ายครบ (แสดงเป็นสีเทา)
+function attBuildWeeks(sessions, academicYear){
+  var weeks = [], cur = null, curKey = null;
+  (sessions || []).forEach(function(sess){
+    var d = sessionDate(sess, academicYear);
+    var wdIdx = THAI_WEEKDAYS_FULL.indexOf(sess.weekday);
+    if (wdIdx < 0 && d) wdIdx = d.getDay();
+    var key = null;
+    if (d){
+      var mon = new Date(d.getTime());
+      mon.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+      key = mon.getFullYear() * 10000 + (mon.getMonth() + 1) * 100 + mon.getDate();
+    }
+    if (!cur || (key !== null && curKey !== null && key !== curKey)){
+      cur = { days: [[], [], [], [], []], extras: [] };
+      weeks.push(cur); curKey = key;
+    } else if (curKey === null && key !== null){ curKey = key; }
+    if (wdIdx >= 1 && wdIdx <= 5) cur.days[wdIdx - 1].push(sess);   // วันเดียวกันหลายชั่วโมง -> ต่อกันในวันนั้น
+    else cur.extras.push(sess);                                      // ส/อา หรือไม่ทราบวัน -> ต่อท้ายสัปดาห์
+  });
+  weeks.forEach(function(w){
+    var cols = [];
+    w.days.forEach(function(list){
+      if (list.length) cols = cols.concat(list); else cols.push(null);
+    });
+    cols = cols.concat(w.extras);
+    while (cols.length < ATT_SLOTS_PER_WEEK) cols.push(null);
+    w.cols = cols;
+    var ms = [];
+    w.cols.forEach(function(x){
+      if (x && x.month && ms.indexOf(x.month) < 0) ms.push(x.month);
+    });
+    w.monthHtml = ms.map(function(m){ return esc(m); }).join("/<wbr>");   // ชื่อเดือนเต็ม
+  });
+  return weeks;
+}
+function attBlankWeek(){
+  var cols = [];
+  for (var i = 0; i < ATT_SLOTS_PER_WEEK; i++) cols.push(ATT_BLANK);
+  return { days: [], extras: [], cols: cols, monthHtml: "", blank: true };
+}
+function attPageCount(subj){
+  var yr = (DB && DB.schoolInfo) ? DB.schoolInfo.academicYear : "";
+  return Math.max(1, Math.ceil(attBuildWeeks(subj.sessions, yr).length / ATT_WEEKS_PER_PAGE));
+}
 function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
   var sessions = s.sessions;
-  var CHUNK_SIZE = ATTENDANCE_CHUNK_SIZE;
-  var chunks = [];
-  for (var i=0;i<sessions.length;i+=CHUNK_SIZE) chunks.push(sessions.slice(i, i+CHUNK_SIZE));
-  if (!chunks.length) chunks = [[]];
+  var weeks = attBuildWeeks(sessions, info.academicYear);
+  var pageWeeks = [];
+  for (var i = 0; i < weeks.length; i += ATT_WEEKS_PER_PAGE) pageWeeks.push(weeks.slice(i, i + ATT_WEEKS_PER_PAGE));
+  if (!pageWeeks.length) pageWeeks = [[]];
+  /* หน้าสุดท้ายต้องมีอย่างน้อย 4 สัปดาห์: ถ้าไม่ถึง เติมสัปดาห์ว่าง (สีเทา) ให้ครบ */
+  var lastWeeks = pageWeeks[pageWeeks.length - 1];
+  while (lastWeeks.length < ATT_MIN_WEEKS_LAST_PAGE) lastWeeks.push(attBlankWeek());
 
-  /* คำนวณ "ชั่วโมงที่เท่าไหร่" สะสมของแต่ละวันเรียน (ไม่นับวันหยุด) ล่วงหน้าครั้งเดียวสำหรับทั้งวิชา
-     เพื่อให้เลขชั่วโมงต่อเนื่องกันถูกต้องแม้ตารางจะถูกแบ่งหน้า (chunk) เวลาพิมพ์
-     startHour: เลขชั่วโมงเริ่มต้น (ใช้ตอนพิมพ์รวมปีการศึกษา เพื่อให้เทอม 2 นับต่อจากเทอม 1 แทนที่จะเริ่มใหม่ที่ 1) */
+  /* เลข "ชั่วโมงที่" สะสมทั้งวิชา (ไม่นับวันหยุด) startHour = ชั่วโมงที่นับมาแล้วก่อนหน้า (ใช้ตอนพิมพ์รวมปี) */
   var hourCounter = Number(startHour) || 0;
-  var hourLabelById = {};
+  var hourNumById = {};
   sessions.forEach(function(sess){
     if (sess.holiday) return;
     var h = Number(sess.hours) || 0;
-    if (h <= 0){ hourLabelById[sess.id] = ""; return; }
-    var startHour = hourCounter + 1;
-    var endHour = hourCounter + h;
-    hourLabelById[sess.id] = "ชม." + (h > 1 ? (startHour + "-" + endHour) : String(startHour));
-    hourCounter = endHour;
+    if (h <= 0){ hourNumById[sess.id] = ""; return; }
+    var a = hourCounter + 1, b = hourCounter + h;
+    hourNumById[sess.id] = h > 1 ? (a + "-" + b) : String(a);
+    hourCounter = b;
   });
 
-  var pages = chunks.map(function(chunkSessions, chunkIndex){
-    var isLastChunk = (chunkIndex === chunks.length - 1);
+  var CELL = 'border:1px solid #333; padding:1.5px 1px;';
+  var FILLER_BG = "#EFEFEF";    // พื้นเทา (สัปดาห์ว่าง / ช่องเติมท้ายหน้า)
+  var TH = 'border:1.5px solid #000; padding:1px; font-weight:700; font-size:11px; line-height:1.25;';   // หัวตาราง: ไม่มีสีพื้น เน้นเส้นหนา
+  var TH_END = ' border-bottom:3px solid #000;';   // เส้นหนาใต้หัวตาราง
+  var GRAY_TD = '<td style="' + CELL + ' background:' + FILLER_BG + ';"></td>';
 
-    /* ถ้าหน้านี้ (โดยเฉพาะหน้าสุดท้าย) มีจำนวนคอลัมน์วัน + คอลัมน์สรุป รวมกันไม่ครบ 13 คอลัมน์
-       ให้เติมคอลัมน์ว่างสีเทาทึบ แทรกต่อจากคอลัมน์วันจริง เพื่อให้ความกว้างตารางเท่ากันทุกหน้า */
-    var FILLER_BG = "#EFEFEF";
-    var summaryColCount = isLastChunk ? 6 : 0;
-    var fillerColCount = Math.max(0, CHUNK_SIZE - chunkSessions.length - summaryColCount);
-    var fillerHeaderCells = "";
-    for (var fh = 0; fh < fillerColCount; fh++){
-      fillerHeaderCells += '<th style="border:1px solid #333; padding:1.5px 2px; background:' + FILLER_BG + ';"></th>';
+  var pages = pageWeeks.map(function(wks, chunkIndex){
+    var isLastChunk = (chunkIndex === pageWeeks.length - 1);
+    var cols = [];
+    wks.forEach(function(w){ cols = cols.concat(w.cols); });
+    var fillerColCount = isLastChunk ? 0 : Math.max(0, ATT_WEEKS_PER_PAGE * ATT_SLOTS_PER_WEEK - cols.length);  // หน้าสุดท้ายเต็ม 4 สัปดาห์พอ ไม่ต่อช่องเทาเพิ่ม
+    var fillerHeader = "", fillerBody = "";
+    for (var f = 0; f < fillerColCount; f++){
+      fillerHeader += '<th rowspan="4" style="' + TH + ' background:' + FILLER_BG + ';' + TH_END + '"></th>';
+      fillerBody += '<td style="' + CELL + ' background:' + FILLER_BG + ';"></td>';
     }
-    var fillerBodyCell = '<td style="border:1px solid #333; padding:1.5px 2px; background:' + FILLER_BG + ';"></td>';
-    var fillerBodyCells = "";
-    for (var fb = 0; fb < fillerColCount; fb++) fillerBodyCells += fillerBodyCell;
 
-    var headerCols = chunkSessions.map(function(sess){
-      if (sess.holiday){
-        return '<th style="border:1px solid #333; padding:1.5px 2px; font-weight:600; font-size:7.5px; line-height:1.2; background:var(--holiday-bg); white-space:normal;">' + esc(monthShort(sess.month)) + '<br/>' + esc(sess.day||"-") + '</th>';
-      }
-      var wdIndex = THAI_WEEKDAYS_FULL.indexOf(sess.weekday);
-      var wd;
-      if (wdIndex >= 0){
-        wd = THAI_WEEKDAYS_SHORT[wdIndex];
-      } else {
-        var d = sessionDate(sess, info.academicYear);
-        wd = d ? THAI_WEEKDAYS_SHORT[d.getDay()] : "";
-      }
-      return '<th style="border:1px solid #333; padding:1.5px 2px; font-weight:600; font-size:7.5px; line-height:1.2;">' +
-        esc(monthShort(sess.month)) + '<br/>' +
-        (wd ? (wd + ' ') : '') + esc(sess.day || "-") + '<br/>' +
-        esc(hourLabelById[sess.id] || "") +
-      '</th>';
-    }).join("") + fillerHeaderCells;
+    var rowWeek = wks.map(function(w, wi){
+      var label = 'สัปดาห์ที่ ' + (chunkIndex * ATT_WEEKS_PER_PAGE + wi + 1);
+      if (w.blank) return '<th colspan="' + w.cols.length + '" style="' + TH + ' background:' + FILLER_BG + '; color:#777; font-size:12px;">' + label + '</th>';
+      return '<th colspan="' + w.cols.length + '" style="' + TH + ' font-size:12px;">' + label + '</th>';
+    }).join("");
+    var rowMonth = wks.map(function(w){
+      if (w.blank) return '<th colspan="' + w.cols.length + '" style="' + TH + ' background:' + FILLER_BG + ';"></th>';
+      return '<th colspan="' + w.cols.length + '" style="' + TH + '">' + w.monthHtml + '</th>';
+    }).join("");
+    var rowDate = cols.map(function(sess){
+      if (sess === ATT_BLANK) return '<th style="' + TH + ' background:' + FILLER_BG + ';"></th>';
+      if (!sess) return '<th style="' + TH + '"></th>';
+      return '<th style="' + TH + (sess.holiday ? ' background:var(--holiday-bg);' : '') + '">' + esc(sess.day || "-") + '</th>';
+    }).join("");
+    var rowHour = cols.map(function(sess){
+      if (sess === ATT_BLANK) return '<th style="' + TH + ' background:' + FILLER_BG + ';' + TH_END + ' height:30px; padding:1px 0;"></th>';
+      var t = (sess && !sess.holiday) ? (hourNumById[sess.id] || "") : "";
+      return '<th style="' + TH + (sess && sess.holiday ? ' background:var(--holiday-bg);' : '') + TH_END + ' height:30px; padding:1px 0;">' +
+        '<span style="writing-mode:vertical-rl; transform:rotate(180deg); display:inline-block; font-size:10px; font-weight:700;">' + esc(t) + '</span></th>';
+    }).join("");
 
-    /* จำนวนแถวข้อมูลทั้งหมดในตารางหน้านี้ (นักเรียนจริง + แถวเปล่าเติมเต็ม) ใช้กำหนด rowspan ของช่องวันหยุดพิเศษ */
     var PAD_ROWS = 45;
     var totalBodyRows = Math.max(comp.rows.length, PAD_ROWS);
     var rowCounter = 0;
-
-    /* ช่องวันหยุดพิเศษ: แสดงหมายเหตุ (เหตุผลที่หยุด) เป็นข้อความแนวตั้งในตัวตาราง โดย merge (rowspan) ตลอดทั้งคอลัมน์ ครั้งเดียวที่แถวแรกของหน้า */
     function holidaySessionCell(sess){
       if (rowCounter !== 0) return "";
       var noteText = esc(sess.note) || "หยุด";
-      return '<td rowspan="' + totalBodyRows + '" style="border:1px solid #333; padding:2px 1px; background:var(--holiday-bg); text-align:center; vertical-align:middle;">' +
-        '<div style="writing-mode:vertical-rl; text-orientation:mixed; font-size:12px; line-height:1.3; display:inline-block; white-space:normal;">' + noteText + '</div>' +
-      '</td>';
+      return '<td rowspan="' + totalBodyRows + '" style="' + CELL + ' background:var(--holiday-bg); text-align:center; vertical-align:middle;">' +
+        '<div style="writing-mode:vertical-rl; text-orientation:mixed; font-size:12px; line-height:1.3; display:inline-block; white-space:normal;">' + noteText + '</div></td>';
     }
 
     var bodyRows = comp.rows.map(function(r){
@@ -5531,17 +6006,19 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
       var transferSessionId = (stu && stu.transferSessionId) || "";
       var transferIndex = transferSessionId ? sessions.findIndex(function(x){ return x.id === transferSessionId; }) : -1;
       var att = s.attendance[r.id] || {};
-      var cells = chunkSessions.map(function(sess){
+      var cells = cols.map(function(sess){
+        if (sess === ATT_BLANK) return GRAY_TD;
+        if (!sess) return '<td style="' + CELL + '"></td>';
         if (sess.holiday) return holidaySessionCell(sess);
         var globalIdx = sessions.indexOf(sess);
-        if (transferIndex !== -1 && globalIdx > transferIndex) return '<td style="border:1px solid #333; padding:1.5px 2px; background:#F4F4F4;"></td>';
+        if (transferIndex !== -1 && globalIdx > transferIndex) return '<td style="' + CELL + ' background:#F4F4F4;"></td>';
         var st = att[sess.id];
         var label = st === "absent" ? "ข" : st === "late" ? "ส" : st === "leave" ? "ล" : st === "sick" ? "ป" : "/";
         var isMark = (st === "absent" || st === "late" || st === "leave" || st === "sick");
         var labelHtml = isMark
           ? '<span style="display:inline-block; color:#B3432E; border-top:1.2px solid #B3432E; border-bottom:1.2px solid #B3432E; border-radius:50%; padding:0 1px; line-height:1.15;">' + label + '</span>'
           : label;
-        return '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + labelHtml + '</td>';
+        return '<td style="' + CELL + ' text-align:center;">' + labelHtml + '</td>';
       }).join("");
 
       var summaryCells = "";
@@ -5557,65 +6034,61 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
         });
         var statusLabel = r.resultStatus ? esc(r.resultStatus) : "ปกติ";
         summaryCells =
-          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (absentCount || "-") + '</td>' +
-          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (leaveCount || "-") + '</td>' +
-          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (sickCount || "-") + '</td>' +
-          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center; font-weight:700;">' + (r.hoursEarned!==null?r.hoursEarned:"-") + '</td>' +
-          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (r.attPercent!==null?r.attPercent:"-") + '</td>' +
-          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + statusLabel + '</td>';
+          '<td style="' + CELL + ' text-align:center;">' + (absentCount || "-") + '</td>' +
+          '<td style="' + CELL + ' text-align:center;">' + (leaveCount || "-") + '</td>' +
+          '<td style="' + CELL + ' text-align:center;">' + (sickCount || "-") + '</td>' +
+          '<td style="' + CELL + ' text-align:center; font-weight:700;">' + (r.hoursEarned !== null ? r.hoursEarned : "-") + '</td>' +
+          '<td style="' + CELL + ' text-align:center;">' + (r.attPercent !== null ? r.attPercent : "-") + '</td>' +
+          '<td style="' + CELL + ' text-align:center;">' + statusLabel + '</td>';
       }
-
       var rowHtml = '<tr>' +
-        '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center; font-size:14px;">' + r.no + '</td>' +
-        '<td style="border:1px solid #333; padding:1.5px 4px; white-space:nowrap; font-size:14px;">' + esc(r.name) + '</td>' +
-        cells + fillerBodyCells + summaryCells +
-      '</tr>';
+        '<td style="' + CELL + ' text-align:center; font-size:14px;">' + r.no + '</td>' +
+        '<td style="' + CELL + ' padding:1.5px 4px; white-space:nowrap; font-size:14px;">' + esc(r.name) + '</td>' +
+        cells + fillerBody + summaryCells + '</tr>';
       rowCounter++;
       return rowHtml;
     }).join("");
 
     for (var rIdx = comp.rows.length; rIdx < PAD_ROWS; rIdx++){
-      var padCells = chunkSessions.map(function(sess){
-        if (sess.holiday) return holidaySessionCell(sess);
-        return '<td style="border:1px solid #333; padding:1.5px 2px;"></td>';
+      var padCells = cols.map(function(sess){
+        if (sess === ATT_BLANK) return GRAY_TD;
+        if (sess && sess.holiday) return holidaySessionCell(sess);
+        return '<td style="' + CELL + '"></td>';
       }).join("");
-      var padSummaryCells = isLastChunk ? Array(6).fill('<td style="border:1px solid #333; padding:1.5px 2px;"></td>').join('') : "";
+      var padSummary = isLastChunk ? Array(6).fill('<td style="' + CELL + '"></td>').join('') : "";
       bodyRows += '<tr>' +
-        '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center; font-size:14px;">' + (rIdx+1) + '</td>' +
-        '<td style="border:1px solid #333; padding:1.5px 4px;">&nbsp;</td>' +
-        padCells + fillerBodyCells + padSummaryCells +
-      '</tr>';
+        '<td style="' + CELL + ' text-align:center; font-size:14px;">' + (rIdx + 1) + '</td>' +
+        '<td style="' + CELL + ' padding:1.5px 4px;">&nbsp;</td>' +
+        padCells + fillerBody + padSummary + '</tr>';
       rowCounter++;
     }
 
     var summaryHeaders = isLastChunk ?
-      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:26px;">ขาด</th>' +
-      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:26px;">ลา</th>' +
-      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:26px;">ป่วย</th>' +
-      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:40px;">รวม<br/>(ชม.)</th>' +
-      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:36px;">ร้อยละ</th>' +
-      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:40px;">สถานะ</th>'
+      '<th rowspan="4" style="' + TH + TH_END + ' width:24px;">ขาด</th>' +
+      '<th rowspan="4" style="' + TH + TH_END + ' width:24px;">ลา</th>' +
+      '<th rowspan="4" style="' + TH + TH_END + ' width:24px;">ป่วย</th>' +
+      '<th rowspan="4" style="' + TH + TH_END + ' width:36px;">รวม<br/>(ชม.)</th>' +
+      '<th rowspan="4" style="' + TH + TH_END + ' width:34px;">ร้อยละ</th>' +
+      '<th rowspan="4" style="' + TH + TH_END + ' width:38px;">สถานะ</th>'
       : "";
 
     var pageNum = startPageNum + chunkIndex;
-    var pageBreakClass = " page-break";
-    var noteHtml = '';
-
     return '' +
-    '<div class="print-area attendance-page' + pageBreakClass + '" data-section="attendance" style="padding:14px 24px; color:#111; position:relative;">' +
+    '<div class="print-area attendance-page page-break" data-section="attendance" style="padding:14px 24px; color:#111; position:relative; -webkit-print-color-adjust:exact; print-color-adjust:exact;">' +
       '<div style="position:absolute; top:14px; right:20px; font-size:11px;">หน้า ' + pageNum + '</div>' +
       '<div style="text-align:center; font-size:18px; font-weight:700; margin-bottom:2px; margin-top:40px;">บันทึกเวลาเรียน รายวิชา' + esc(s.subject) + ' รหัสวิชา ' + esc(s.subjectCode) + '</div>' +
       '<div style="text-align:center; font-size:16px; margin-bottom:8px;">' + esc(info.schoolName || "") + (info.affiliation ? (' สังกัด' + esc(info.affiliation)) : "") + ' &nbsp; ปีการศึกษา ' + esc(info.academicYear) + '</div>' +
       '<table style="width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed; flex:1 1 auto;">' +
-        '<thead><tr>' +
-          '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:28px;">เลขที่</th>' +
-          '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:160px;">ชื่อ - นามสกุล</th>' +
-          headerCols +
-          summaryHeaders +
-        '</tr></thead>' +
+        '<thead>' +
+          '<tr><th rowspan="4" style="' + TH + TH_END + ' width:28px;">เลขที่</th>' +
+              '<th rowspan="4" style="' + TH + TH_END + ' width:150px; font-size:13px;">ชื่อ - นามสกุล</th>' +
+              rowWeek + fillerHeader + summaryHeaders + '</tr>' +
+          '<tr>' + rowMonth + '</tr>' +
+          '<tr>' + rowDate + '</tr>' +
+          '<tr>' + rowHour + '</tr>' +
+        '</thead>' +
         '<tbody>' + bodyRows + '</tbody>' +
       '</table>' +
-      noteHtml +
     '</div>';
   }).join("");
 
