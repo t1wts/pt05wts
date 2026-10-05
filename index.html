@@ -958,8 +958,23 @@ function removeStudent(id){
   delete s.readWriteScores[id];
   scheduleSave(); rerender();
 }
+/* บันทึกทันที (เครื่อง + คลาวด์) — ใช้กับปุ่มลบ/แทนที่ทั้งหมด กันข้อมูลเก่าจากคลาวด์ถูกโหลดกลับมาทับถ้ารีเฟรชก่อนซิงก์ */
+function flushSaveNow(){
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
+  try{ pushUndoSnapshot(); }catch(e){}
+  try{ if (window.cloudSaveNow) window.cloudSaveNow(); }catch(e){}
+}
+function deleteAllStudents(){
+  var s = getSubj();
+  if (!s.students.length){ window.alert("ยังไม่มีนักเรียนในรายชื่อ"); return; }
+  if (!window.confirm("ลบนักเรียนทั้งหมด " + s.students.length + " คน?\n\nคะแนนและเวลาเรียนของนักเรียนทุกคนในวิชานี้จะหายไปด้วย\n\n(ถ้าพลาด กด Ctrl+Z เพื่อย้อนกลับได้)")) return;
+  s.students = []; s.attendance = {}; s.scores = {}; s.desirableScores = {}; s.readWriteScores = {};
+  UI.attPasteUndo = null; UI.scorePasteUndo = null;
+  scheduleSave(); flushSaveNow(); rerender();
+}
 function toggleRosterImport(){
   UI.rosterImportOpen = !UI.rosterImportOpen;
+  UI.rosterImportMode = null; UI.rosterImportClearBlank = true;
   UI.rosterImportStep = "paste";
   UI.rosterImportTable = null;
   UI.rosterImportColTypes = null;
@@ -984,9 +999,13 @@ function classifyRosterHeaderCell(text){
 function analyzeRosterPaste(){
   var ta = document.getElementById("rosterPasteArea");
   if (!ta) return;
+  /* ไม่ตัดบรรทัดว่างกลางข้อมูลทิ้ง (บางคนอาจไม่มีเลข/ไม่มีนามสกุล แถวต้องไม่เลื่อน) ตัดเฉพาะบรรทัดว่างหัว-ท้ายสุด */
   var rawLines = (ta.value || "").split(/\r\n|\r|\n/)
-    .map(function(l){ return l.replace(/\r+$/,""); })
-    .filter(function(l){ return l.length > 0; });
+    .map(function(l){ return l.replace(/\r+$/,""); });
+  while (rawLines.length && rawLines[rawLines.length-1].trim() === "") rawLines.pop();
+  var firstNonBlank = 0;
+  while (firstNonBlank < rawLines.length && rawLines[firstNonBlank].trim() === "") firstNonBlank++;
+  rawLines = rawLines.slice(firstNonBlank);
   if (!rawLines.length) return;
 
   var table = rawLines.map(splitPasteCells);
@@ -1002,10 +1021,10 @@ function analyzeRosterPaste(){
     var colKinds = []; // "seq" | "digits" | "text" per column
     for (var ci = 0; ci < numCols; ci++){
       var vals = table.map(function(r){ return r[ci] || ""; }).filter(function(v){ return v.length > 0; });
-      var allDigits = vals.length > 0 && vals.every(function(v){ return /^\d+$/.test(v); });
+      var allDigits = vals.length > 0 && vals.every(function(v){ return /^[\d๐-๙]+$/.test(v); });
       var seqLike = false;
       if (allDigits){
-        var nums = vals.map(Number);
+        var nums = vals.map(function(v){ return Number(v.replace(/[๐-๙]/g, function(d){ return "๐๑๒๓๔๕๖๗๘๙".indexOf(d); })); });
         seqLike = nums[0] <= 2 && nums.every(function(n,i){ return i===0 || n === nums[i-1] + 1; });
       }
       colKinds.push(seqLike ? "seq" : (allDigits ? "digits" : "text"));
@@ -1047,10 +1066,128 @@ function backToRosterPaste(){
   rerender();
 }
 /* ขั้นที่ 2: ผู้ใช้ยืนยันว่าแต่ละคอลัมน์คืออะไร และแถวแรกเป็นหัวตารางหรือไม่ แล้วค่อยเพิ่มนักเรียนจริง */
+/* นับจำนวนแถวที่มีชื่อ (ใช้ตัดสินว่าข้อมูลที่วางเป็น "รายชื่อใหม่" หรือ "เลขประจำตัวอย่างเดียว") */
+function rosterImportNameCount(){
+  var rowsData = rosterImportDataRows(), colTypes = UI.rosterImportColTypes, n = 0;
+  if (!rowsData.length || !colTypes) return 0;
+  rowsData.forEach(function(cells){
+    var prefix="", first="", last="", full="";
+    cells.forEach(function(val,i){
+      var type = colTypes[i];
+      if (type==="prefix" && !prefix) prefix = val;
+      else if (type==="firstname" && !first) first = val;
+      else if (type==="lastname" && !last) last = val;
+      else if (type==="fullname" && !full) full = val;
+    });
+    if ((full || [(prefix+first).trim(), last].filter(Boolean).join(" ")).trim()) n++;
+  });
+  return n;
+}
+/* ===== โหมดอัปเดตรายชื่อ: แก้เลขประจำตัว/ชื่อ/นามสกุลของนักเรียนที่มีอยู่แล้วตามลำดับแถว (ไม่สร้างนักเรียนใหม่) ===== */
+function rosterImportSidOnly(){
+  var ct = UI.rosterImportColTypes || [];
+  /* มีแค่คอลัมน์เลขประจำตัวและ/หรือนามสกุล (ไม่มีชื่อ/คำนำหน้า/ชื่อเต็ม) → ถือเป็นการอัปเดตข้อมูลเดิม ไม่ใช่การเพิ่มนักเรียนใหม่ */
+  var hasUpd = ct.indexOf("sid") >= 0 || ct.indexOf("lastname") >= 0;
+  var hasNameCore = ct.indexOf("firstname") >= 0 || ct.indexOf("prefix") >= 0 || ct.indexOf("fullname") >= 0;
+  return hasUpd && !hasNameCore && getSubj().students.length > 0;
+}
+/* โหมดที่ใช้จริง: ผู้ใช้เลือกเอง ถ้ายังไม่เลือก → ถ้าวางมาแต่เลขประจำตัว (ไม่มีชื่อ) จะเป็นอัปเดตอัตโนมัติ */
+function rosterImportMode(){
+  if (!getSubj().students.length) return "add";
+  return UI.rosterImportMode || (rosterImportSidOnly() ? "update" : "add");
+}
+function setRosterImportMode(v){ UI.rosterImportMode = v; rerender(); }
+function toggleRosterImportClearBlank(c){ UI.rosterImportClearBlank = !!c; rerender(); }
+function rosterImportNormSid(v){
+  var x = String(v||"").replace(/[๐-๙]/g, function(d){ return String("๐๑๒๓๔๕๖๗๘๙".indexOf(d)); }).replace(/\u00a0/g, " ").trim().replace(/^(\d+)\.0+$/, "$1");
+  if (x === "") return "";
+  if (!/\d/.test(x) || /[ก-ฮ]/.test(x) || x.length > 20) return null;
+  return x;
+}
+/* แยกชื่อเดิมที่เก็บเป็นข้อความเดียว → ส่วนหน้า (คำนำหน้า+ชื่อ) กับนามสกุล (คำสุดท้ายหลังช่องว่าง) */
+function rosterImportSplitName(name){
+  var n = String(name||"").replace(/\s+/g, " ").trim();
+  var m = /^(.*) (\S+)$/.exec(n);
+  return m ? { first: m[1], last: m[2] } : { first: n, last: "" };
+}
+function isNumericOnlyName(v){ return /^[\d\s.,\-]+$/.test(v); }
+/* วางแผนการเปลี่ยนแปลง (ยังไม่แก้ข้อมูลจริง) */
+function rosterImportPlan(){
+  var rows = rosterImportDataRows(), ct = UI.rosterImportColTypes || [], s = getSubj();
+  var clearBlank = UI.rosterImportClearBlank !== false;
+  var plan = { changes: [], bad: [], rowCount: rows.length, mapped: false };
+  var sidCol = ct.indexOf("sid"), prefixCol = ct.indexOf("prefix"), firstCol = ct.indexOf("firstname"), lastCol = ct.indexOf("lastname"), fullCol = ct.indexOf("fullname");
+  var nameMapped = prefixCol >= 0 || firstCol >= 0 || lastCol >= 0 || fullCol >= 0;
+  plan.mapped = sidCol >= 0 || nameMapped;
+  var n = Math.min(rows.length, s.students.length);
+  for (var i = 0; i < n; i++){
+    var cells = rows[i], st = s.students[i];
+    var cell = function(ci){ return ci >= 0 ? String(cells[ci] === undefined ? "" : cells[ci]).trim() : ""; };
+    if (sidCol >= 0){
+      var sv = rosterImportNormSid(cell(sidCol));
+      if (sv === null) plan.bad.push({ row: i + 1, val: cell(sidCol), expect: "เลขประจำตัว (ต้องมีตัวเลข และไม่ใช่ชื่อ)" });
+      else if (sv === "" && !clearBlank){ /* คงค่าเดิม */ }
+      else if (sv !== (st.sid || "")) plan.changes.push({ i: i, field: "sid", oldV: st.sid || "", newV: sv });
+    }
+    if (nameMapped){
+      var ex = rosterImportSplitName(st.name), newName = null;
+      if (fullCol >= 0){
+        var fv = cell(fullCol);
+        if (fv !== "") newName = fv.replace(/\s+/g, " ");
+      } else {
+        var firstNew = ((prefixCol >= 0 ? cell(prefixCol) : "") + (firstCol >= 0 ? cell(firstCol) : "")).trim();
+        var firstPart = (prefixCol >= 0 || firstCol >= 0) && firstNew !== "" ? firstNew : ex.first;
+        var lastPart = ex.last;
+        if (lastCol >= 0){ var lv = cell(lastCol); lastPart = lv !== "" ? lv : (clearBlank ? "" : ex.last); }
+        newName = [firstPart, lastPart].filter(Boolean).join(" ");
+      }
+      if (newName !== null){
+        if (isNumericOnlyName(newName)) plan.bad.push({ row: i + 1, val: newName, expect: "ชื่อ-นามสกุล (ข้อความ ไม่ใช่ตัวเลขล้วน)" });
+        else if (newName !== String(st.name || "").replace(/\s+/g, " ").trim()) plan.changes.push({ i: i, field: "name", oldV: st.name || "", newV: newName });
+      }
+    }
+  }
+  return plan;
+}
+function confirmRosterUpdate(){
+  var s = getSubj(), plan = rosterImportPlan();
+  if (plan.bad.length){
+    window.alert("ไม่สามารถอัปเดตรายชื่อได้\n\nพบข้อมูลที่ไม่ตรงประเภทของช่อง " + plan.bad.length + " ช่อง:\n\n" +
+      plan.bad.slice(0,8).map(function(p){ return "• แถวที่ " + p.row + ": \"" + p.val + "\" → ต้องเป็น " + p.expect; }).join("\n") +
+      (plan.bad.length > 8 ? "\n• …และอีก " + (plan.bad.length - 8) + " ช่อง" : "") + "\n\nยังไม่มีการเปลี่ยนแปลงข้อมูล");
+    return;
+  }
+  if (!plan.changes.length){ window.alert("ไม่มีช่องที่ต้องเปลี่ยน (ข้อมูลที่วางเหมือนของเดิม หรือยังไม่ได้เลือกคอลัมน์ที่จะอัปเดต)"); return; }
+  var warns = [];
+  if (plan.rowCount < s.students.length) warns.push("• ข้อมูลที่วางมี " + plan.rowCount + " แถว แต่รายชื่อมีนักเรียน " + s.students.length + " คน — จะอัปเดต " + plan.rowCount + " คนแรก ที่เหลือคงค่าเดิม");
+  if (plan.rowCount > s.students.length) warns.push("• ข้อมูลที่วางมี " + plan.rowCount + " แถว เกินจำนวนนักเรียน " + s.students.length + " คน — แถวที่เกิน " + (plan.rowCount - s.students.length) + " แถวจะถูกตัดทิ้ง");
+  var cleared = plan.changes.filter(function(c){ return c.newV === "" && c.oldV !== ""; }).length;
+  var overwritten = plan.changes.filter(function(c){ return c.newV !== "" && c.oldV !== ""; }).length;
+  if (overwritten) warns.push("• " + overwritten + " ช่องมีค่าเดิมอยู่แล้ว และจะถูกเปลี่ยนเป็นค่าใหม่");
+  if (cleared) warns.push("• " + cleared + " ช่องว่างในข้อมูลที่วาง จะล้างค่าเดิมของนักเรียนคนนั้นให้ว่าง");
+  if (warns.length && !window.confirm("ตรวจพบข้อควรระวังก่อนอัปเดตรายชื่อ:\n\n" + warns.join("\n") + "\n\nต้องการวางต่อหรือไม่?\n(กด ตกลง = วางต่อ · กด ยกเลิก = ไม่เปลี่ยนแปลงอะไร)")) return;
+  plan.changes.forEach(function(c){ s.students[c.i][c.field] = c.newV; });
+  UI.rosterImportOpen = false;
+  UI.rosterImportStep = "paste";
+  UI.rosterImportTable = null;
+  UI.rosterImportColTypes = null;
+  UI.rosterImportFirstRowIsHeader = false;
+  scheduleSave(); rerender();
+}
 function confirmRosterImport(){
   var rows = rosterImportDataRows();
   var colTypes = UI.rosterImportColTypes;
   if (!rows.length || !colTypes) return;
+  if (rosterImportMode() === "update"){ confirmRosterUpdate(); return; }
+  if (rosterImportMode() === "replace"){
+    var sOld = getSubj();
+    if (!rosterImportNameCount()){
+      window.alert("ไม่พบชื่อนักเรียนในข้อมูลที่วาง จึงยังไม่ลบรายชื่อเดิม\n\nกรุณาตรวจสอบว่าเลือกคอลัมน์ชื่อ/นามสกุลถูกต้อง");
+      return;
+    }
+    if (!window.confirm("แทนที่รายชื่อทั้งหมด?\n\nนักเรียนเดิม " + sOld.students.length + " คน จะถูกลบ พร้อมคะแนนและเวลาเรียนของนักเรียนเหล่านั้น แล้วนำเข้านักเรียนใหม่ " + rosterImportNameCount() + " คน\n\n(ถ้าพลาด กด Ctrl+Z เพื่อย้อนกลับได้)")) return;
+    sOld.students = []; sOld.attendance = {}; sOld.scores = {}; sOld.desirableScores = {}; sOld.readWriteScores = {};
+  }
 
   var s = getSubj();
   var nextNo = s.students.length ? Math.max.apply(null, s.students.map(function(x){return x.no;})) + 1 : 1;
@@ -1081,7 +1218,7 @@ function confirmRosterImport(){
   UI.rosterImportTable = null;
   UI.rosterImportColTypes = null;
   UI.rosterImportFirstRowIsHeader = false;
-  scheduleSave(); rerender();
+  scheduleSave(); if (typeof replaceMode!=="undefined"&&replaceMode||typeof genReplace!=="undefined"&&genReplace||(typeof rosterImportMode==="function"&&rosterImportMode()==="replace")) flushSaveNow(); rerender();
 }
 function updateStudent(id, field, value){
   var s = getSubj();
@@ -1142,6 +1279,32 @@ function addSession(holiday){
   Object.keys(s.attendance).forEach(function(sid){ s.attendance[sid][id] = "present"; });
   scheduleSave(); rerender();
 }
+function wipeAllSessions(s){
+  s.sessions = [];
+  Object.keys(s.attendance).forEach(function(sid){ s.attendance[sid] = {}; });
+  s.students.forEach(function(st){
+    if (st.transferSessionId){
+      st.transferSessionId = "";
+      if (st.resultStatus === "ย้าย") st.resultStatus = "";
+    }
+  });
+}
+function clearAllAttendance(){
+  var s = getSubj();
+  if (!s.students.length || !s.sessions.length){ window.alert("ยังไม่มีข้อมูลเวลาเรียนให้ล้าง (ต้องมีทั้งนักเรียนและวันเรียน)"); return; }
+  if (!window.confirm("ล้างข้อมูลเวลาเรียนทั้งหมด?\n\nการบันทึกขาด/สาย/ลา/ป่วยของนักเรียนทุกคนจะถูกรีเซ็ตเป็น \"มาเรียน\" (วันเรียนในตารางยังอยู่ครบ)\n\n(ถ้าพลาด กด Ctrl+Z เพื่อย้อนกลับได้)")) return;
+  s.students.forEach(function(st){ s.attendance[st.id] = emptyAttendance(s.sessions); });
+  UI.attPasteUndo = null;
+  scheduleSave(); flushSaveNow(); rerender();
+}
+function deleteAllSessions(){
+  var s = getSubj();
+  if (!s.sessions.length){ window.alert("ยังไม่มีวันเรียนในตาราง"); return; }
+  if (!window.confirm("ลบวันเรียนทั้งหมด " + s.sessions.length + " แถว?\n\nวันเรียน วันหยุด และข้อมูลการมาเรียนของนักเรียนทุกคนจะหายไป (รายชื่อนักเรียนยังอยู่)\n\n(ถ้าพลาด กด Ctrl+Z เพื่อย้อนกลับได้)")) return;
+  wipeAllSessions(s);
+  UI.attPasteUndo = null;
+  scheduleSave(); flushSaveNow(); rerender();
+}
 function generateWeeklySessions(){
   var s = getSubj();
   var startMonth = document.getElementById("genStartMonth").value;
@@ -1169,6 +1332,15 @@ function generateWeeklySessions(){
      ให้ครบตามจำนวนชั่วโมงแทนการสร้างวันเดียวที่มีหลายชั่วโมง เพื่อให้แต่ละแถว/คอลัมน์ในตารางแทนเวลาเรียน 1 ชั่วโมงเสมอ */
   var repeatPerDay = Math.max(1, Math.round(Number(hours)) || 1);
 
+  var genReplaceEl = document.getElementById("genReplace");
+  var genReplace = !!(genReplaceEl && genReplaceEl.checked);
+  var backupSessions = null, backupAttendance = null, backupTransfer = null;
+  if (genReplace){
+    if (!window.confirm("แทนที่วันเรียนเดิมทั้งหมด?\n\nวันเรียน/วันหยุดเดิม " + s.sessions.length + " แถว และข้อมูลการมาเรียนที่บันทึกไว้จะถูกลบ แล้วสร้างวันเรียนใหม่ตามเงื่อนไขนี้\n\n(ถ้าพลาด กด Ctrl+Z เพื่อย้อนกลับได้)")) return;
+    backupSessions = deepCopy(s.sessions); backupAttendance = deepCopy(s.attendance);
+    backupTransfer = s.students.map(function(st){ return { id: st.id, t: st.transferSessionId, r: st.resultStatus }; });
+    wipeAllSessions(s);
+  }
   var existingKeys = {};
   s.sessions.forEach(function(sess){
     var d = sessionDate(sess, academicYear);
@@ -1194,6 +1366,10 @@ function generateWeeklySessions(){
     cur.setDate(cur.getDate()+1);
   }
   if (addedDays === 0){
+    if (genReplace){
+      s.sessions = backupSessions; s.attendance = backupAttendance;
+      backupTransfer.forEach(function(b){ var st = s.students.find(function(x){ return x.id === b.id; }); if (st){ st.transferSessionId = b.t; st.resultStatus = b.r; } });
+    }
     window.alert("ไม่พบวันที่ตรงเงื่อนไข หรือมีอยู่ในตารางแล้วทั้งหมด");
     return;
   }
@@ -1202,8 +1378,8 @@ function generateWeeklySessions(){
     if (!da || !db) return 0;
     return da - db;
   });
-  scheduleSave(); rerender();
-  window.alert("เพิ่มวันเรียนสำเร็จ "+addedDays+" วัน" + (repeatPerDay > 1 ? (" (วันละ "+repeatPerDay+" ชั่วโมง รวม "+addedSessions+" แถว)") : ""));
+  scheduleSave(); if (typeof replaceMode!=="undefined"&&replaceMode||typeof genReplace!=="undefined"&&genReplace||(typeof rosterImportMode==="function"&&rosterImportMode()==="replace")) flushSaveNow(); rerender();
+  window.alert((genReplace ? "แทนที่วันเรียนสำเร็จ — สร้างใหม่ " : "เพิ่มวันเรียนสำเร็จ ")+addedDays+" วัน" + (repeatPerDay > 1 ? (" (วันละ "+repeatPerDay+" ชั่วโมง รวม "+addedSessions+" แถว)") : ""));
 }
 function duplicateSession(id){
   /* กฎ 1 วัน = 1 ชั่วโมง: ถ้าวิชานี้เรียนวันเดิมมากกว่า 1 ชั่วโมง ให้กดปุ่มนี้เพื่อสร้าง "วันเรียนซ้ำ"
@@ -1706,8 +1882,14 @@ function onLevelInput(el, kind, studentId, itemId, rowIndex, colIndex, numCols){
     if (!text) return;
     var grid = parseClip(text);
     var single = grid.length === 1 && grid[0].length === 1;
-    /* ช่องเดียว + กำลังแก้ละเอียดอยู่ → วางตามปกติลงในช่อง */
-    if (single && el.classList.contains("xl-edit")) return;
+    /* ช่องเดียว + กำลังแก้ละเอียดอยู่ → วางตามปกติลงในช่อง (แต่ถ้าไม่ใช่ตัวเลขคะแนน → แจ้งเตือนและไม่วาง) */
+    if (single && el.classList.contains("xl-edit")){
+      if (!validFor(el, grid[0][0])){
+        ev.preventDefault();
+        xlPasteBlocked("คะแนน", [{ row: 1, col: 1, val: grid[0][0], expect: xlExpectScore(el) }]);
+      }
+      return;
+    }
 
     ev.preventDefault();
     var r0 = parseInt(el.getAttribute("data-srow"), 10), c0 = parseInt(el.getAttribute("data-scol"), 10);
@@ -1715,7 +1897,11 @@ function onLevelInput(el, kind, studentId, itemId, rowIndex, colIndex, numCols){
 
     var selected = Array.prototype.slice.call(document.querySelectorAll("input.fill-cell-sel"));
     if (single && selected.length > 1){
-      /* วางค่าเดียวทับทุกช่องที่เลือก เหมือน Excel */
+      /* วางค่าเดียวทับทุกช่องที่เลือก เหมือน Excel (ถ้าค่าไม่ใช่คะแนนที่ถูกต้อง → แจ้งเตือนและไม่วางเลย) */
+      if (!selected.every(function(c){ return c.disabled || validFor(c, grid[0][0]); })){
+        xlPasteBlocked("คะแนน", [{ row: 1, col: 1, val: grid[0][0], expect: xlExpectScore(selected.filter(function(c){ return !c.disabled && !validFor(c, grid[0][0]); })[0]) }]);
+        return;
+      }
       selected.forEach(function(c){ if (c.disabled) return; if (setCell(c, grid[0][0])) ok++; else skipped++; });
     } else {
       if (selected.length > 1){
@@ -1726,21 +1912,26 @@ function onLevelInput(el, kind, studentId, itemId, rowIndex, colIndex, numCols){
       var allRows = Array.prototype.map.call(document.querySelectorAll("input[data-studentid]"), function(c){ return parseInt(c.getAttribute("data-srow"), 10); }).filter(function(n){ return !isNaN(n); });
       var maxRow = Math.max.apply(null, allRows);
       var rowsAvail = maxRow - r0 + 1;
-      var overCells = 0, badCells = 0, overRows = Math.max(0, grid.length - rowsAvail);
+      var overCells = 0, badCells = 0, badList = [], overRows = Math.max(0, grid.length - rowsAvail);
       var maxColsPasted = 0;
       grid.forEach(function(row, i){
         if (row.length > maxColsPasted) maxColsPasted = row.length;
         row.forEach(function(val, j){
           var c = cellAt(r0 + i, c0 + j);
           if (!c) overCells++;
-          else if (!c.disabled && !validFor(c, val)) badCells++;
+          else if (!c.disabled && !validFor(c, val)){ badCells++; badList.push({ row: i + 1, col: j + 1, val: val, expect: xlExpectScore(c) }); }
         });
       });
+      /* ข้อมูลไม่ตรงประเภท (เช่น วางชื่อลงช่องคะแนน) → แจ้งเตือนและไม่วางเลยทั้งชุด */
+      if (badList.length){ xlPasteBlocked("คะแนน", badList); return; }
       var missingRows = Math.max(0, rowsAvail - grid.length);
+      var tblEl = el.closest("table"), maxScol = -1;
+      if (tblEl) Array.prototype.forEach.call(tblEl.querySelectorAll("input[data-studentid]"), function(c){ var n = parseInt(c.getAttribute("data-scol"), 10); if (n > maxScol) maxScol = n; });
+      var missingCols = Math.max(0, (maxScol - c0 + 1) - maxColsPasted);
       var warns = [];
       if (overCells > 0) warns.push("• ข้อมูลที่วางมี " + grid.length + " แถว × " + maxColsPasted + " คอลัมน์ เกินขอบตาราง " + overCells + " ช่อง" + (overRows ? " (เกิน " + overRows + " แถว)" : "") + " — ส่วนที่เกินจะถูกตัดทิ้ง");
-      if (missingRows > 0) warns.push("• ข้อมูลที่วางมีแค่ " + grid.length + " แถว แต่ตารางมีอีก " + rowsAvail + " แถวนับจากช่องที่เลือก — ไม่ครบ " + missingRows + " แถว (แถวที่เหลือจะคงคะแนนเดิมไว้)");
-      if (badCells > 0) warns.push("• มี " + badCells + " ช่องที่ไม่ใช่คะแนนที่ถูกต้อง — จะถูกข้ามไป");
+      if (missingRows > 0 && !single) warns.push("• ข้อมูลที่วางมีแค่ " + grid.length + " แถว แต่ตารางมีอีก " + rowsAvail + " แถวนับจากช่องที่เลือก — ไม่ครบ " + missingRows + " แถว (แถวที่เหลือจะคงคะแนนเดิมไว้)");
+      if (missingCols > 0 && maxColsPasted > 1) warns.push("• ข้อมูลที่วางมีแค่ " + maxColsPasted + " คอลัมน์ แต่ตารางมีอีก " + (maxScol - c0 + 1) + " คอลัมน์นับจากช่องที่เลือก — ไม่ครบ " + missingCols + " คอลัมน์ (คอลัมน์ที่เหลือจะคงคะแนนเดิมไว้)");
       if (warns.length){
         var go = window.confirm("ตรวจพบข้อควรระวังก่อนวางคะแนน:\n\n" + warns.join("\n") + "\n\nต้องการวางต่อหรือไม่?\n(กด ตกลง = วางต่อ · กด ยกเลิก = ไม่เปลี่ยนแปลงอะไร)");
         if (!go){ toast("ยกเลิกการวางคะแนนแล้ว ไม่มีการเปลี่ยนแปลง"); return; }
@@ -1882,20 +2073,24 @@ function onLevelInput(el, kind, studentId, itemId, rowIndex, colIndex, numCols){
     var b = attBounds();
     var rowsAvail = b.maxR - r0 + 1;
 
-    var over = 0, bad = 0, maxPastedCols = 0;
+    var over = 0, bad = 0, badList = [], maxPastedCols = 0;
     grid.forEach(function(row, i){
       if (row.length > maxPastedCols) maxPastedCols = row.length;
       row.forEach(function(v, j){
         var col = teachCols[startIdx + j];
         if (r0 + i > b.maxR || col === undefined){ over++; return; }
-        if (v !== "" && attPasteNormalizeValue(v) === null) bad++;
+        if (v !== "" && attPasteNormalizeValue(v) === null){ bad++; badList.push({ row: i + 1, col: j + 1, val: v, expect: "สถานะเวลาเรียน (ข ส ล ป หรือ - / มา)" }); }
       });
     });
+    /* ข้อมูลไม่ตรงประเภท (เช่น วางชื่อลงช่องเช็คชื่อ) → แจ้งเตือนและไม่วางเลยทั้งชุด */
+    if (badList.length){ xlPasteBlocked("เวลาเรียน", badList); return; }
     var missingRows = Math.max(0, rowsAvail - grid.length);
+    var missingColsAtt = Math.max(0, (teachCols.length - startIdx) - maxPastedCols);
     var warns = [];
     if (over > 0) warns.push("• ข้อมูลที่วางมี " + grid.length + " แถว × " + maxPastedCols + " คอลัมน์ เกินขอบตาราง " + over + " ช่อง — ส่วนที่เกินจะถูกตัดทิ้ง");
-    if (missingRows > 0) warns.push("• ข้อมูลที่วางมีแค่ " + grid.length + " แถว แต่ตารางมีอีก " + rowsAvail + " แถวนับจากช่องที่เลือก — ไม่ครบ " + missingRows + " แถว (แถวที่เหลือจะคงค่าเดิมไว้)");
-    if (bad > 0) warns.push("• มี " + bad + " ช่องที่ไม่ใช่สถานะที่ถูกต้อง (ใช้ได้: ข ขาด ส สาย ล ลา ป ป่วย / - มา) — จะถูกข้ามไป");
+    var attSingle = grid.length === 1 && grid[0].length === 1;
+    if (missingRows > 0 && !attSingle) warns.push("• ข้อมูลที่วางมีแค่ " + grid.length + " แถว แต่ตารางมีอีก " + rowsAvail + " แถวนับจากช่องที่เลือก — ไม่ครบ " + missingRows + " แถว (แถวที่เหลือจะคงค่าเดิมไว้)");
+    if (missingColsAtt > 0 && maxPastedCols > 1) warns.push("• ข้อมูลที่วางมีแค่ " + maxPastedCols + " คอลัมน์ แต่ตารางมีอีก " + (teachCols.length - startIdx) + " วันเรียนนับจากช่องที่เลือก — ไม่ครบ " + missingColsAtt + " คอลัมน์ (วันที่เหลือจะคงค่าเดิมไว้)");
     if (warns.length){
       var go = window.confirm("ตรวจพบข้อควรระวังก่อนวางเวลาเรียน:\n\n" + warns.join("\n") + "\n\nต้องการวางต่อหรือไม่?\n(กด ตกลง = วางต่อ · กด ยกเลิก = ไม่เปลี่ยนแปลงอะไร)");
       if (!go){ toast("ยกเลิกการวางเวลาเรียนแล้ว ไม่มีการเปลี่ยนแปลง"); return; }
@@ -1986,6 +2181,330 @@ function onLevelInput(el, kind, studentId, itemId, rowIndex, colIndex, numCols){
     if (key === "Enter"){ ev.preventDefault(); sessMove(table, r + 1, c, 1, 0); }
   }, true);
 })();
+/* ===== ระบบวางข้อมูลจากภายนอกแบบ Excel (กลาง) =====
+   ใช้ร่วมกันทุกหน้า: หน้ารายชื่อ · หน้าเวลาเรียน (ตารางวันเรียน + ตารางเช็คชื่อ) · หน้าโครงสร้าง · หน้าคะแนน/คุณลักษณะ/อ่านเขียน
+   กติกา:
+   1) วางลงตามช่อง/แถว/คอลัมน์ที่คัดลอกมา เริ่มจากช่องที่เลือก (เหมือน Excel)
+   2) ถ้าข้อมูลเกินขอบตาราง หรือแถว/คอลัมน์ไม่ครบ → ขึ้นแจ้งเตือนให้ยืนยันก่อน (ยกเลิก = ไม่เปลี่ยนอะไรเลย)
+   3) ถ้ามีข้อมูลไม่ตรงประเภทของช่อง (เช่น ช่องคะแนนแต่วางชื่อ) → ขึ้นแจ้งเตือนและ "ไม่วางเลย" ทั้งชุด */
+function xlToast(msg, isErr){
+  var t = document.getElementById("xlPasteToast");
+  if (!t){
+    t = document.createElement("div");
+    t.id = "xlPasteToast";
+    document.body.appendChild(t);
+  }
+  t.style.cssText = "position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:" + (isErr ? "#B3432E" : "#217346") + ";color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;z-index:99999;box-shadow:0 4px 14px rgba(0,0,0,.25);transition:opacity .3s;max-width:90vw;text-align:center;";
+  t.textContent = msg; t.style.opacity = "1";
+  clearTimeout(t._h); t._h = setTimeout(function(){ t.style.opacity = "0"; }, 4000);
+}
+function xlExpectScore(el){
+  var k = el && el.getAttribute ? el.getAttribute("data-kind") : "";
+  return (k === "desirable" || k === "readWrite") ? "ตัวเลข 0–3" : "ตัวเลขคะแนน เช่น 8 หรือ 7.5";
+}
+/* ข้อมูลไม่ตรงประเภท → แจ้งเตือนแล้วไม่วางอะไรเลย  problems = [{row, col, val, expect}] (row/col นับจากข้อมูลที่วางมา เริ่มที่ 1) */
+function xlPasteBlocked(title, problems){
+  var n = problems.length, shown = problems.slice(0, 8);
+  var msg = "ไม่สามารถวาง" + title + "ได้\n\nพบข้อมูลที่ไม่ตรงประเภทของช่อง " + n + " ช่อง:\n\n" +
+    shown.map(function(p){ return "• แถวที่ " + p.row + " คอลัมน์ที่ " + p.col + " ของข้อมูลที่วาง: \"" + p.val + "\" → ช่องนี้ต้องเป็น " + p.expect; }).join("\n") +
+    (n > shown.length ? "\n• …และอีก " + (n - shown.length) + " ช่อง" : "") +
+    "\n\nยังไม่มีการวางข้อมูลลงตาราง (ไม่เปลี่ยนแปลงอะไรเลย)\nกรุณาตรวจสอบข้อมูลที่คัดลอกและช่องที่เลือกวาง แล้วลองใหม่";
+  window.alert(msg);
+  xlToast("ยกเลิกการวาง" + title + ": มีข้อมูลไม่ตรงประเภทของช่อง", true);
+}
+/* แถว/คอลัมน์เกินหรือไม่ครบ → ถามยืนยัน */
+function xlPasteConfirm(title, warns){
+  if (!warns.length) return true;
+  var go = window.confirm("ตรวจพบข้อควรระวังก่อนวาง" + title + ":\n\n" + warns.join("\n") + "\n\nต้องการวางต่อหรือไม่?\n(กด ตกลง = วางต่อ · กด ยกเลิก = ไม่เปลี่ยนแปลงอะไร)");
+  if (!go) xlToast("ยกเลิกการวาง" + title + "แล้ว ไม่มีการเปลี่ยนแปลง");
+  return go;
+}
+/* แปลงข้อความจากคลิปบอร์ด (TSV จาก Excel/Google Sheets) เป็นตาราง รองรับช่องที่ครอบด้วย " และมีขึ้นบรรทัดใหม่ในช่อง */
+function xlParseClip(text){
+  text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  var rows = [], row = [], cur = "", inQ = false;
+  for (var i = 0; i < text.length; i++){
+    var ch = text.charAt(i);
+    if (inQ){
+      if (ch === '"'){ if (text.charAt(i + 1) === '"'){ cur += '"'; i++; } else inQ = false; }
+      else cur += ch;
+    } else if (ch === '"' && cur === ""){ inQ = true; }
+    else if (ch === "\t"){ row.push(cur); cur = ""; }
+    else if (ch === "\n"){ row.push(cur); rows.push(row); row = []; cur = ""; }
+    else cur += ch;
+  }
+  row.push(cur); rows.push(row);
+  if (rows.length > 1){ var last = rows[rows.length - 1]; if (last.length === 1 && last[0] === "") rows.pop(); } /* Excel ใส่บรรทัดว่างท้ายข้อมูลเสมอ */
+  return rows.map(function(r){ return r.map(function(c){ return c.trim(); }); });
+}
+(function(){
+  /* ---------- ตัวแปลงค่าแต่ละชนิดช่อง (คืน null = ไม่ตรงประเภท) ---------- */
+  function normMonth(v){
+    var t = v.replace(/\s/g, "");
+    if (MONTHS.indexOf(t) >= 0) return t;
+    var si = THAI_MONTHS_SHORT.indexOf(t); if (si >= 0) return MONTHS[si];
+    var si2 = THAI_MONTHS_SHORT.indexOf(t.replace(/\.?$/, ".")); if (si2 >= 0) return MONTHS[si2];
+    if (/^\d{1,2}$/.test(t)){ var n = parseInt(t, 10); if (n >= 1 && n <= 12) return MONTHS[n - 1]; }
+    return null;
+  }
+  function normDay(v){
+    if (!/^\d{1,2}$/.test(v)) return null;
+    var n = parseInt(v, 10);
+    return (n >= 1 && n <= 31) ? String(n) : null;
+  }
+  function normWeekday(v){
+    var t = v.replace(/\s/g, "").replace(/^วัน/, "").replace(/\.$/, "");
+    if (THAI_WEEKDAYS_FULL.indexOf(t) >= 0) return t;
+    var si = THAI_WEEKDAYS_SHORT.indexOf(t); if (si >= 0) return THAI_WEEKDAYS_FULL[si];
+    return null;
+  }
+  function normBool(v){
+    var t = v.replace(/\s/g, "").toLowerCase();
+    if (["หยุด","วันหยุด","ใช่","y","yes","true","1","✓","✔","x","/","ติ๊ก"].indexOf(t) >= 0) return true;
+    if (["","0","ไม่","ไม่หยุด","no","n","false","-"].indexOf(t) >= 0) return false;
+    return null;
+  }
+  function normStructType(v){
+    var t = v.replace(/\s/g, "").toLowerCase();
+    if (/สอบ|exam/.test(t)) return "exam";
+    if (/ตัวชี้วัด|เก็บ|collect/.test(t)) return "collect";
+    return null;
+  }
+  var HEADER_RE = /^(ที่|ลำดับ|เลขที่|no\.?|เลขประจำตัว(นักเรียน)?|รหัส(นักเรียน|ประจำตัว)?|id|student ?id|ชื่อ|ชื่อ-?สกุล|ชื่อ-?นามสกุล|ชื่อ ?- ?นามสกุล|นามสกุล|คำนำหน้า|เดือน|วันที่|วัน|วันหยุด|หมายเหตุ|ตัวชี้วัด|ชื่อรายการ|ประเภท|ช่วงเวลา|คะแนนเต็ม)$/i;
+  function looksHeader(row){
+    var cells = row.filter(function(c){ return c !== ""; });
+    return cells.length > 0 && cells.every(function(c){ return HEADER_RE.test(c.replace(/\s+/g, " ").trim()); });
+  }
+  function isNumericOnly(v){ return /^[\d\s.,\-]+$/.test(v); }
+
+  /* ---------- หาตารางที่โฟกัสอยู่ ---------- */
+  function ctxOf(el){
+    if (!el || !el.closest) return null;
+    var tbl = el.closest("table");
+    if (!tbl || el.getAttribute("data-srow") === null || el.getAttribute("data-scol") === null) return null;
+    if (tbl.querySelector('[id^="f_sid_"]')) return { kind: "roster", tbl: tbl, title: "รายชื่อนักเรียน" };
+    if (tbl.querySelector('[id^="f_day_"]')) return { kind: "session", tbl: tbl, title: "รายการวันเรียน" };
+    if (tbl.querySelector('[id^="f_stmax_"]')) return { kind: "struct", tbl: tbl, title: "โครงสร้างรายวิชา" };
+    return null;
+  }
+  function boundsOf(tbl){
+    var cells = tbl.querySelectorAll("[data-srow][data-scol]"), maxR = -1, maxC = -1;
+    for (var i = 0; i < cells.length; i++){
+      var r = parseInt(cells[i].getAttribute("data-srow"), 10), c = parseInt(cells[i].getAttribute("data-scol"), 10);
+      if (r > maxR) maxR = r; if (c > maxC) maxC = c;
+    }
+    return { maxR: maxR, maxC: maxC };
+  }
+  function cellIn(tbl, r, c){ return tbl.querySelector('[data-srow="' + r + '"][data-scol="' + c + '"]'); }
+
+  /* ---------- ตรวจแต่ละช่อง: คืน { field, value, skip } หรือ { bad: "ข้อความว่าต้องเป็นอะไร" } ---------- */
+  function checkRoster(target, v){
+    var id = target.id || "";
+    if (id.indexOf("f_sid_") === 0){
+      if (v === "") return { field: "sid", value: "" }; /* ช่องว่าง = ล้างค่า (บางคนไม่มีเลขประจำตัว) */
+      /* รับเลขไทย/ช่องว่าง/สัญลักษณ์ได้ แต่ต้องมีตัวเลขอย่างน้อย 1 ตัว และต้องไม่มีตัวอักษรไทย (กันวางชื่อลงช่องเลขประจำตัว) */
+      var sidv = v.replace(/[๐-๙]/g, function(d){ return String("๐๑๒๓๔๕๖๗๘๙".indexOf(d)); }).replace(/\u00a0/g, " ").trim().replace(/^(\d+)\.0+$/, "$1");
+      if (!/\d/.test(sidv) || /[ก-ฮ]/.test(sidv) || sidv.length > 20) return { bad: "เลขประจำตัวนักเรียน (ต้องมีตัวเลข และไม่ใช่ชื่อ)" };
+      return { field: "sid", value: sidv };
+    }
+    if (id.indexOf("f_name_") === 0){
+      if (v === "") return { field: "name", value: "" };
+      if (isNumericOnly(v)) return { bad: "ชื่อ-นามสกุล (ข้อความ ไม่ใช่ตัวเลขล้วน)" };
+      return { field: "name", value: v };
+    }
+    return { skip: true };
+  }
+  function checkSession(target, v){
+    var col = parseInt(target.getAttribute("data-scol"), 10), r;
+    if (target.disabled) return { skip: true }; /* ช่องชั่วโมงแก้ไขไม่ได้ (คำนวณอัตโนมัติ) */
+    if (col === 0){ if (v === "") return { skip: true }; r = normMonth(v); return r ? { field: "month", value: r } : { bad: "เดือน เช่น มิถุนายน / มิ.ย. / เลข 1–12" }; }
+    if (col === 1){ if (v === "") return { skip: true }; r = normDay(v); return r ? { field: "day", value: r } : { bad: "วันที่ (ตัวเลข 1–31)" }; }
+    if (col === 2){ if (v === "" || v === "-") return { skip: true }; r = normWeekday(v); return r ? { field: "weekday", value: r } : { bad: "วันในสัปดาห์ เช่น จันทร์ / จ." }; }
+    if (col === 4){ r = normBool(v); return r === null ? { bad: "ติ๊กวันหยุด (ใช่/ไม่ หรือ 1/0)" } : { field: "holiday", value: r }; }
+    if (col === 5) return { field: "note", value: v };
+    return { skip: true };
+  }
+  function structFieldOf(target){
+    var id = target.id || "";
+    if (id.indexOf("f_stno_") === 0) return "indicatorNo";
+    if (id.indexOf("f_stname_") === 0 || id.indexOf("f_stitemname_") === 0) return "name";
+    if (id.indexOf("f_stitemdesc_") === 0) return "desc";
+    if (id.indexOf("f_stmax_") === 0) return "max";
+    if (target.tagName === "SELECT") return target.getAttribute("data-scol") === "2" ? "type" : "period";
+    return null;
+  }
+  /* rowType = ประเภทของแถวนั้นหลังวาง (ถ้าวางคอลัมน์ประเภทมาด้วยให้ใช้ค่าที่วาง) */
+  function checkStruct(target, v, rowType){
+    var f = structFieldOf(target);
+    if (f === "indicatorNo"){
+      if (v === "") return { skip: true };
+      return /^\d+([.\-]\d+)*$/.test(v) ? { field: f, value: v } : { bad: "เลขท้ายตัวชี้วัด เช่น 1 หรือ 2.1" };
+    }
+    if (f === "name"){
+      if (v === "") return { skip: true };
+      return isNumericOnly(v) ? { bad: "ชื่อรายการ (ข้อความ ไม่ใช่ตัวเลขล้วน)" } : { field: f, value: v };
+    }
+    if (f === "desc") return { field: f, value: v };
+    if (f === "max"){
+      if (v === "") return { skip: true };
+      return (/^\d+(\.\d+)?$/.test(v) && Number(v) > 0) ? { field: f, value: v } : { bad: "คะแนนเต็ม (ตัวเลขมากกว่า 0)" };
+    }
+    if (f === "type"){
+      if (v === "") return { skip: true };
+      var t = normStructType(v);
+      return t ? { field: f, value: t } : { bad: "ประเภท: คะแนนเก็บ (ตัวชี้วัด) หรือ คะแนนสอบ" };
+    }
+    if (f === "period"){
+      if (v === "" || v === "-") return { skip: true };
+      var n = normalizeStructPeriodText(v);
+      if (!n) return { bad: "ช่วงเวลา: ก่อนกลางภาค / หลังกลางภาค / กลางภาค / ปลายภาค" };
+      /* ถ้าวางคอลัมน์ประเภทมาพร้อมกัน ช่วงเวลาต้องตรงกับประเภทนั้น · ถ้าวางแค่ช่วงเวลา จะตั้งประเภทให้ตามช่วงเวลา */
+      if (rowType && n.type !== rowType) return { bad: "ช่วงเวลาที่ตรงกับประเภทที่วางมา (" + (rowType === "exam" ? "กลางภาค หรือ ปลายภาค" : "ก่อนกลางภาค หรือ หลังกลางภาค") + ")" };
+      return { field: f, value: n.period, impliedType: n.type };
+    }
+    return { skip: true };
+  }
+
+  /* ---------- ลงค่าจริง (รวมทั้งชุดแล้ว rerender ครั้งเดียว) ---------- */
+  function applyRoster(s, updates){
+    var n = 0;
+    Object.keys(updates).forEach(function(r){
+      var st = s.students[+r]; if (!st) return;
+      var u = updates[r];
+      Object.keys(u).forEach(function(f){ st[f] = u[f]; n++; });
+    });
+    return n;
+  }
+  function applySession(s, updates){
+    var n = 0;
+    Object.keys(updates).forEach(function(r){
+      var sess = s.sessions[+r]; if (!sess) return;
+      var u = updates[r];
+      if (u.month !== undefined){ sess.month = u.month; n++; }
+      if (u.day !== undefined){ sess.day = u.day; n++; }
+      if ((u.month !== undefined || u.day !== undefined) && u.weekday === undefined && !sess.weekday){
+        var d = sessionDate(sess, DB.schoolInfo.academicYear);
+        if (d) sess.weekday = THAI_WEEKDAYS_FULL[d.getDay()]; /* เดาวันในสัปดาห์จากวันที่ เหมือนตอนพิมพ์เอง */
+      }
+      if (u.weekday !== undefined){ sess.weekday = u.weekday; n++; }
+      if (u.holiday !== undefined){ sess.holiday = u.holiday; sess.hours = u.holiday ? 0 : 1; n++; }
+      if (u.note !== undefined){ sess.note = u.note; n++; }
+    });
+    return n;
+  }
+  function applyStruct(s, updates, items){
+    var n = 0;
+    Object.keys(updates).forEach(function(r){
+      var it = items[+r]; if (!it) return;
+      var u = updates[r];
+      ["indicatorNo", "name", "desc", "max"].forEach(function(f){ if (u[f] !== undefined){ it[f] = u[f]; n++; } });
+      if (u.type !== undefined && u.type !== it.type){
+        it.type = u.type;
+        if (u.type === "collect" && (!it.period || it.period === "midterm" || it.period === "final")) it.period = "before";
+        if (u.type === "exam" && (!it.period || it.period === "before" || it.period === "after")) it.period = "midterm";
+        if (u.type === "collect" && !it.indicatorNo) it.indicatorNo = String(s.structure.filter(function(i){ return i.type === "collect"; }).length);
+        n++;
+      }
+      if (u.period !== undefined){
+        it.period = u.period; n++;
+        if (it.type === "exam" && !it.indicatorNo) it.indicatorNo = String(s.structure.filter(function(i){ return i.type === "exam" && (i.period || "midterm") === (it.period || "midterm") && i.id !== it.id; }).length + 1);
+      }
+    });
+    return n;
+  }
+
+  document.addEventListener("paste", function(ev){
+    var el = ev.target;
+    if (!el || el === document.body || el === document.documentElement) el = document.activeElement;
+    var ctx = ctxOf(el);
+    if (!ctx) return;
+    var cd = ev.clipboardData || window.clipboardData;
+    var text = cd ? cd.getData("text") : "";
+    if (!text) return;
+    var grid = xlParseClip(text);
+    var single = grid.length === 1 && grid[0].length === 1;
+    var s = getSubj();
+    var r0 = parseInt(el.getAttribute("data-srow"), 10), c0 = parseInt(el.getAttribute("data-scol"), 10);
+    if (isNaN(r0) || isNaN(c0)) return;
+    var b = boundsOf(ctx.tbl);
+    var items = ctx.kind === "struct" ? structureSortedForDisplay(s) : null;
+
+    /* ช่องข้อความที่กำลังแก้อยู่ + วางค่าเดียว → ให้วางลงในช่องตามปกติ แต่ยังตรวจประเภทก่อน */
+    var isTextInput = el.tagName === "INPUT" && el.type === "text";
+    var editingInline = single && isTextInput && (el.classList.contains("xl-edit") || ctx.kind !== "session");
+    var rowTypeOf = function(r, rowPasted){
+      if (rowPasted && rowPasted.type) return rowPasted.type;
+      return null;
+    };
+
+    /* ผ่านรอบแรก: ตรวจทุกช่อง (ยังไม่แก้ข้อมูลจริง) */
+    function scanGrid(){
+    var rowPastedType = {}; /* struct: ประเภทที่วางมาของแต่ละแถว */
+    if (ctx.kind === "struct"){
+      grid.forEach(function(row, i){
+        row.forEach(function(v, j){
+          var t = cellIn(ctx.tbl, r0 + i, c0 + j);
+          if (t && structFieldOf(t) === "type" && v !== ""){ var tt = normStructType(v); if (tt) rowPastedType[r0 + i] = tt; }
+        });
+      });
+    }
+    var problems = [], updates = {}, over = 0, maxCols = 0;
+    grid.forEach(function(row, i){
+      if (row.length > maxCols) maxCols = row.length;
+      row.forEach(function(v, j){
+        var t = cellIn(ctx.tbl, r0 + i, c0 + j);
+        if (!t){ over++; return; }
+        var res;
+        if (ctx.kind === "roster") res = checkRoster(t, v);
+        else if (ctx.kind === "session") res = checkSession(t, v);
+        else res = checkStruct(t, v, rowTypeOf(r0 + i, { type: rowPastedType[r0 + i] }));
+        if (res.bad){ problems.push({ row: i + 1, col: j + 1, val: v, expect: res.bad }); return; }
+        if (res.skip) return;
+        var rr = r0 + i;
+        if (!updates[rr]) updates[rr] = {};
+        updates[rr][res.field] = res.value;
+        if (res.impliedType && updates[rr].type === undefined) updates[rr].type = res.impliedType;
+      });
+    });
+    return { problems: problems, updates: updates, over: over, maxCols: maxCols };
+    }
+    var scan = scanGrid();
+    /* แถวแรกเป็นหัวตาราง (เช่น "เลขประจำตัว", "ชื่อ-นามสกุล") → ถามว่าจะข้ามไหม ไม่งั้นหัวตารางจะถูกวางเป็นข้อมูล หรือทำให้วางไม่ได้ทั้งชุด */
+    if (grid.length > 1 && (looksHeader(grid[0]) || (scan.problems.length && scan.problems.every(function(p){ return p.row === 1; })))){
+      if (window.confirm('แถวแรกของข้อมูลที่วางดูเหมือนหัวตาราง:\n\n"' + grid[0].filter(Boolean).join('"  "') + '"\n\nต้องการข้ามแถวแรก แล้ววางเฉพาะข้อมูลที่เหลือหรือไม่?\n(กด ตกลง = ข้ามแถวแรก · กด ยกเลิก = วางทุกแถวตามที่คัดลอกมา)')){
+        grid = grid.slice(1); scan = scanGrid();
+      }
+    }
+    var problems = scan.problems, updates = scan.updates, over = scan.over, maxCols = scan.maxCols;
+
+    if (problems.length){ ev.preventDefault(); xlPasteBlocked(ctx.title, problems); return; }
+    if (editingInline) return; /* ค่าเดียวถูกประเภท → ปล่อยให้วางลงช่องตามปกติ */
+    ev.preventDefault();
+
+    /* รอบสอง: เกิน/ไม่ครบ → ถามยืนยัน */
+    var rowsAvail = b.maxR - r0 + 1, colsAvail = b.maxC - c0 + 1;
+    var warns = [];
+    if (over > 0) warns.push("• ข้อมูลที่วางมี " + grid.length + " แถว × " + maxCols + " คอลัมน์ เกินขอบตาราง " + over + " ช่อง" + (grid.length > rowsAvail ? " (เกิน " + (grid.length - rowsAvail) + " แถว)" : "") + " — ส่วนที่เกินจะถูกตัดทิ้ง");
+    if (grid.length < rowsAvail && !single) warns.push("• ข้อมูลที่วางมีแค่ " + grid.length + " แถว แต่ตารางมีอีก " + rowsAvail + " แถวนับจากช่องที่เลือก — ไม่ครบ " + (rowsAvail - grid.length) + " แถว (แถวที่เหลือจะคงค่าเดิมไว้)");
+    if (maxCols < colsAvail && maxCols > 1) warns.push("• ข้อมูลที่วางมีแค่ " + maxCols + " คอลัมน์ แต่ตารางมีอีก " + colsAvail + " คอลัมน์นับจากช่องที่เลือก — ไม่ครบ " + (colsAvail - maxCols) + " คอลัมน์ (คอลัมน์ที่เหลือจะคงค่าเดิมไว้)");
+    if (ctx.kind === "roster"){
+      var clr = 0;
+      Object.keys(updates).forEach(function(r){ var st = s.students[+r]; if (!st) return; Object.keys(updates[r]).forEach(function(f){ if (updates[r][f] === "" && st[f]) clr++; }); });
+      if (clr) warns.push("• มี " + clr + " ช่องว่างในข้อมูลที่วาง — จะล้างเลขประจำตัว/ชื่อเดิมของนักเรียนคนนั้นให้ว่าง (แถวไม่เลื่อน)");
+    }
+    if (!xlPasteConfirm(ctx.title, warns)) return;
+
+    var n = 0;
+    if (ctx.kind === "roster") n = applyRoster(s, updates);
+    else if (ctx.kind === "session") n = applySession(s, updates);
+    else n = applyStruct(s, updates, items);
+    if (n > 0){ scheduleSave(); rerender(); }
+    var msg = n > 0 ? "วาง" + ctx.title + "แล้ว " + n + " ช่อง" : "ไม่มีช่องที่ต้องเปลี่ยน";
+    if (over) msg += " · " + over + " ช่องเกินขอบตาราง (ตัดทิ้ง)";
+    xlToast(msg);
+  }, true);
+})();
+
 /* ตั้งคะแนนเดียวกันให้ทุกคนในคอลัมน์นั้นทันที (เขียนทับของเดิม) ข้ามนักเรียนสถานะ ย้าย/มส ให้อัตโนมัติ */
 function fillColumnScore(kind, itemId, value){
   var s = getSubj();
@@ -2042,6 +2561,17 @@ function updateMakeupMidScore(studentId, value){
   if (!s.scores[studentId]) s.scores[studentId] = { items: emptyItemScores(s.structure), makeup: "", makeupMid: "" };
   s.scores[studentId].makeupMid = value;
   scheduleSave(); rerender();
+}
+function deleteAllStructureItems(){
+  var s = getSubj();
+  if (!s.structure.length){ window.alert("ยังไม่มีรายการในโครงสร้างรายวิชา"); return; }
+  if (!window.confirm("ลบรายการโครงสร้างทั้งหมด " + s.structure.length + " รายการ?\n\nคะแนนที่กรอกไว้ของทุกรายการ (คะแนนเก็บและคะแนนสอบ) จะหายไปด้วย\n\n(ถ้าพลาด กด Ctrl+Z เพื่อย้อนกลับได้)")) return;
+  s.structure.forEach(function(it){
+    Object.keys(s.scores).forEach(function(sid){ if (s.scores[sid] && s.scores[sid].items) delete s.scores[sid].items[it.id]; });
+  });
+  s.structure = [];
+  UI.structPasteUndo = null; UI.scorePasteUndo = null;
+  scheduleSave(); flushSaveNow(); rerender();
 }
 function addStructureItem(type, period){
   var s = getSubj();
@@ -3515,6 +4045,29 @@ function renderRoster(s){
       sampleCells += '<td style="padding:4px 8px; font-size:12px; color:var(--gray);">'+(samples||"—")+'</td>';
     }
     var willImport = previewImportCount();
+    var isUpdate = rosterImportMode() === "update";
+    var isReplace = rosterImportMode() === "replace";
+    var hasStudents = getSubj().students.length > 0;
+    var plan = isUpdate ? rosterImportPlan() : null;
+    var modeBox = "";
+    if (hasStudents){
+      modeBox = '<div style="background:#F5F2EA; border-radius:6px; padding:10px 12px; margin-bottom:10px; font-size:14px; color:var(--ink);">' +
+        '<div style="font-weight:600; margin-bottom:6px;">วิธีนำเข้า</div>' +
+        '<label style="display:block; margin-bottom:4px; cursor:pointer;"><input type="radio" name="rosterImportMode" '+(!isUpdate&&!isReplace?"checked":"")+' onchange="setRosterImportMode(\'add\')"/> เพิ่มเป็นนักเรียนใหม่ต่อท้ายรายชื่อ</label>' +
+        '<label style="display:block; margin-bottom:4px; cursor:pointer;"><input type="radio" name="rosterImportMode" '+(isUpdate?"checked":"")+' onchange="setRosterImportMode(\'update\')"/> อัปเดตนักเรียนที่มีอยู่แล้ว (แถวที่ 1 = นักเรียนคนที่ 1 ตามลำดับ) — เปลี่ยนเลขประจำตัว / ชื่อ / นามสกุล</label>' +
+        '<label style="display:block; cursor:pointer;"><input type="radio" name="rosterImportMode" '+(isReplace?"checked":"")+' onchange="setRosterImportMode(\'replace\')"/> แทนที่ทั้งหมด — ลบนักเรียนเดิมทั้งหมด (รวมคะแนนและเวลาเรียนของนักเรียนเหล่านั้น) แล้วนำเข้ารายชื่อที่วางเป็นรายชื่อใหม่</label>' +
+        (isUpdate ? '<label style="display:flex; align-items:center; gap:6px; margin-top:8px; cursor:pointer;"><input type="checkbox" '+(UI.rosterImportClearBlank!==false?"checked":"")+' onchange="toggleRosterImportClearBlank(this.checked)"/> ช่องว่างในข้อมูลที่วาง = ล้างค่าเดิมให้ว่าง (สำหรับคนที่ไม่มีเลข/ไม่มีนามสกุล) — ไม่ติ๊ก = ช่องว่างจะคงค่าเดิมไว้</label>' : '') +
+      '</div>';
+    }
+    var updateSummary = "";
+    if (isUpdate){
+      var nClear = plan.changes.filter(function(c){ return c.newV === "" && c.oldV !== ""; }).length;
+      var fieldLabel = { sid: "เลขประจำตัว", name: "ชื่อ" };
+      updateSummary = 'พบข้อมูล '+plan.rowCount+' แถว จะ<b>อัปเดตนักเรียนที่มีอยู่แล้ว</b> (ไม่เพิ่มนักเรียนใหม่) · เปลี่ยน <b>'+plan.changes.length+'</b> ช่อง' + (nClear ? ' (ล้างให้ว่าง '+nClear+' ช่อง)' : '') +
+        (plan.bad.length ? ' · <span style="color:#B3432E;">มีข้อมูลไม่ตรงประเภท '+plan.bad.length+' ช่อง (จะไม่ถูกวาง)</span>' : '') +
+        (!plan.mapped ? ' · <span style="color:#B3432E;">ยังไม่ได้เลือกคอลัมน์ที่จะอัปเดต</span>' : '') +
+        (plan.changes.length ? '<div style="margin-top:6px; font-size:12px; line-height:1.6;">ตัวอย่างที่จะเปลี่ยน:<br/>' + plan.changes.slice(0,6).map(function(c){ var st = getSubj().students[c.i]; return 'เลขที่ '+esc(st.no)+' · '+fieldLabel[c.field]+': '+(esc(c.oldV)||'<i>(ว่าง)</i>')+' → '+(esc(c.newV)||'<i>(ว่าง)</i>'); }).join('<br/>') + (plan.changes.length > 6 ? '<br/>…และอีก '+(plan.changes.length-6)+' ช่อง' : '') + '</div>' : '');
+    }
     return '' +
     '<div style="background:white; border:1px solid var(--line); border-radius:8px; padding:14px; margin-top:12px;">' +
       '<div style="font-size:15px; font-weight:600; color:var(--ink); margin-bottom:4px;">ตรวจสอบคอลัมน์ก่อนนำเข้า</div>' +
@@ -3523,6 +4076,7 @@ function renderRoster(s){
         '<input type="checkbox" '+(isHeader?"checked":"")+' onchange="toggleRosterImportHeaderRow(this.checked)"/>' +
         'บรรทัดแรกที่วางมาเป็นหัวตาราง (จะไม่นับเป็นชื่อนักเรียน)' +
       '</label>' +
+      modeBox +
       '<div class="table-scroll"><table style="border-collapse:collapse; width:100%; min-width:'+(numCols*140)+'px;">' +
         '<thead><tr style="background:#F5F2EA;">'+headCells+'</tr></thead>' +
         '<tbody>' +
@@ -3530,9 +4084,9 @@ function renderRoster(s){
           '<tr>'+sampleCells+'</tr>' +
         '</tbody>' +
       '</table></div>' +
-      '<div style="font-size:13px; color:var(--gray); margin-top:8px;">พบข้อมูล '+sampleSource.length+' แถว จะนำเข้าเป็นนักเรียน '+willImport+' คน</div>' +
+      '<div style="font-size:13px; color:var(--gray); margin-top:8px;">' + (isUpdate ? updateSummary : isReplace ? ('พบข้อมูล '+sampleSource.length+' แถว จะ<b style="color:#B3432E;">ลบนักเรียนเดิมทั้งหมด '+getSubj().students.length+' คน</b> (พร้อมคะแนนและเวลาเรียน) แล้วนำเข้าเป็นรายชื่อใหม่ '+willImport+' คน') : 'พบข้อมูล '+sampleSource.length+' แถว จะนำเข้าเป็นนักเรียน '+willImport+' คน') + '</div>' +
       '<div style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;">' +
-        '<button class="btn-solid" onclick="confirmRosterImport()">'+icon("plus",15)+' ยืนยันนำเข้า '+willImport+' รายการ</button>' +
+        '<button class="btn-solid" onclick="confirmRosterImport()">'+icon("plus",15)+(isUpdate ? ' ยืนยันอัปเดต '+plan.changes.length+' ช่อง' : isReplace ? ' ยืนยันแทนที่ด้วย '+willImport+' รายการ' : ' ยืนยันนำเข้า '+willImport+' รายการ')+'</button>' +
         '<button class="btn-outline" onclick="backToRosterPaste()">ย้อนกลับ</button>' +
         '<button class="btn-outline" onclick="toggleRosterImport()">ยกเลิก</button>' +
       '</div>' +
@@ -3562,6 +4116,7 @@ function renderRoster(s){
   '<div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap;">' +
     '<button class="btn-outline" onclick="addStudent()">'+icon("plus",15)+' เพิ่มนักเรียน</button>' +
     '<button class="btn-outline" onclick="toggleRosterImport()">'+icon("plus",15)+' วางรายชื่อจาก Excel</button>' +
+    (s.students.length ? '<button class="btn-outline" style="border-color:#B3432E; color:#B3432E;" onclick="deleteAllStudents()">'+icon("trash",15,"#B3432E")+' ลบนักเรียนทั้งหมด</button>' : '') +
   '</div>' +
   importBox;
 }
@@ -3646,6 +4201,8 @@ function renderAttendance(s, comp){
       '<button class="btn-outline" onclick="addSession(false)">'+icon("plus",15)+' เพิ่มวันเรียน</button>' +
       '<button class="btn-outline" style="border-color:var(--holiday-color); color:var(--holiday-color);" onclick="addSession(true)">'+icon("calendarOff",15)+' เพิ่มวันหยุดพิเศษ</button>' +
       '<button class="btn-outline" onclick="openAttPasteImport()">'+icon("upload",15)+' วางเวลาเรียนจาก Excel</button>' +
+      '<button class="btn-outline" style="border-color:#B3432E; color:#B3432E;" onclick="clearAllAttendance()">'+icon("trash",15,"#B3432E")+' ล้างเวลาเรียนทั้งหมด</button>' +
+      '<button class="btn-outline" style="border-color:#B3432E; color:#B3432E;" onclick="deleteAllSessions()">'+icon("trash",15,"#B3432E")+' ลบวันเรียนทั้งหมด</button>' +
       renderAttPasteUndoInline() +
     '</div>' +
     attPasteImportBlock(s) +
@@ -3677,6 +4234,7 @@ function renderAttendance(s, comp){
           return '<label style="display:flex; align-items:center; gap:4px; font-size:14px; cursor:pointer;"><input type="checkbox" id="genWd_'+idx+'"/>'+wd+'</label>';
         }).join("") +
       '</div>' +
+      '<label style="display:flex; align-items:center; gap:6px; margin-bottom:10px; font-size:14px; color:#B3432E; cursor:pointer;"><input type="checkbox" id="genReplace"/> แทนที่วันเรียนเดิม — ลบวันเรียนทั้งหมดที่มีอยู่ (รวมข้อมูลการมาเรียนที่บันทึกไว้) ก่อนสร้างตามเงื่อนไขนี้ · ไม่ติ๊ก = เพิ่มเฉพาะวันที่ยังไม่มีในตาราง</label>' +
       '<button class="btn-outline" onclick="generateWeeklySessions()">'+icon("plus",15)+' สร้างวันเรียนตามเงื่อนไขนี้</button>' +
     '</div>' +
     '<div class="table-scroll"><table class="ptable" style="max-width:680px;"><thead><tr>' +
@@ -3742,6 +4300,7 @@ function attPasteNormalizeValue(raw){
 function openAttPasteImport(){
   var s = getSubj();
   UI.attPasteOpen = true;
+  UI.attPasteMode = "update";
   UI.attPasteStep = "paste";
   UI.attPasteTable = null;
   UI.attPasteColTypes = null;
@@ -4002,6 +4561,7 @@ function applyAttPasteWeekdayPatternNow(){
   attPasteApplyWeekdayPattern(UI.attPasteColTypes, lead, sessions, UI.attPasteWeekdayPattern);
   rerender();
 }
+function setAttPasteMode(v){ UI.attPasteMode = v; rerender(); }
 function setAttPasteColType(colIndex, value){
   if (!UI.attPasteColTypes) return;
   UI.attPasteColTypes[colIndex] = value;
@@ -4114,6 +4674,18 @@ function confirmAttPasteImport(){
   var preview = buildAttPastePreview();
   var importedValues = 0, importedStudents = 0, skippedBlocked = 0, skippedUnmatched = 0, skippedAfterTransfer = 0;
   var backupData = deepCopy(s.attendance);
+  var replaceMode = UI.attPasteMode === "replace", resetStudents = 0;
+  if (replaceMode){
+    var matchedIds = {}, blockedIds = {};
+    preview.forEach(function(e){ if (e.matched) matchedIds[e.matched.id] = true; });
+    computeSubject(s).rows.forEach(function(r){ if (r.resultStatus === "มส") blockedIds[r.id] = true; });
+    var notInPaste = s.students.filter(function(st){ return !matchedIds[st.id] && !blockedIds[st.id]; }).length;
+    if (!window.confirm("แทนที่ข้อมูลเวลาเรียนทั้งหมด?\n\nระบบจะรีเซ็ตเวลาเรียนของนักเรียนทุกคนเป็น \"มาเรียน\" ก่อน แล้วใส่ค่าตามข้อมูลที่วาง" + (notInPaste ? "\n\nนักเรียน " + notInPaste + " คนไม่อยู่ในข้อมูลที่วาง จะกลับเป็นมาเรียนทั้งหมด" : "") + "\n\n(ถ้าพลาด กดลิงก์ \"ย้อนกลับการวางเวลาเรียนล่าสุด\" หรือ Ctrl+Z ได้)")) return;
+    s.students.forEach(function(st){
+      if (blockedIds[st.id]) return; /* สถานะ มส ข้ามเหมือนโหมดอัปเดต */
+      s.attendance[st.id] = emptyAttendance(s.sessions); resetStudents++;
+    });
+  }
 
   preview.forEach(function(entry){
     if (!entry.matched){ skippedUnmatched++; return; }
@@ -4129,7 +4701,7 @@ function confirmAttPasteImport(){
     if (any) importedStudents++;
   });
 
-  if (importedValues > 0){
+  if (importedValues > 0 || replaceMode){
     UI.attPasteUndo = { subjectId: DB.currentId, data: backupData, importedValues: importedValues, importedStudents: importedStudents };
   }
 
@@ -4140,13 +4712,13 @@ function confirmAttPasteImport(){
   UI.attPasteFirstRowIsHeader = false;
   UI.attPasteUseRowOrder = false;
   UI.attPasteWeekdayPattern = "";
-  scheduleSave(); rerender();
+  scheduleSave(); if (typeof replaceMode!=="undefined"&&replaceMode||typeof genReplace!=="undefined"&&genReplace||(typeof rosterImportMode==="function"&&rosterImportMode()==="replace")) flushSaveNow(); rerender();
 
-  var msg = "นำเข้าเวลาเรียนสำเร็จ "+importedValues+" ค่า ("+importedStudents+" คน)";
+  var msg = (replaceMode ? "แทนที่ข้อมูลเวลาเรียนสำเร็จ (รีเซ็ตเป็นมาเรียน "+resetStudents+" คน แล้วใส่ค่าที่วาง) " : "นำเข้าเวลาเรียนสำเร็จ ")+importedValues+" ค่า ("+importedStudents+" คน)";
   if (skippedBlocked) msg += " · ข้าม "+skippedBlocked+" คน (สถานะ มส)";
   if (skippedAfterTransfer) msg += " · ข้าม "+skippedAfterTransfer+" ช่อง (อยู่หลังวันที่ย้ายออกของนักเรียนคนนั้น)";
   if (skippedUnmatched) msg += " · ไม่พบคู่ตรง "+skippedUnmatched+" แถว";
-  if (importedValues > 0) msg += "\n\nถ้าใส่ผิด กดลิงก์ \"ย้อนกลับการวางเวลาเรียนล่าสุด\" ที่ปุ่มด้านบนตารางได้ทันที";
+  if (importedValues > 0 || replaceMode) msg += "\n\nถ้าใส่ผิด กดลิงก์ \"ย้อนกลับการวางเวลาเรียนล่าสุด\" ที่ปุ่มด้านบนตารางได้ทันที";
   window.alert(msg);
 }
 function undoAttPasteImport(){
@@ -4202,6 +4774,7 @@ function renderAttPasteMapBox(){
   var mismatchCount = preview.filter(function(e){ return e.nameMismatch; }).length;
   var duplicateCount = preview.filter(function(e){ return e.duplicate; }).length;
   var rowCountMismatch = !hasIdCol && attPasteDataRows().length !== s.students.length;
+  var attReplace = UI.attPasteMode === "replace";
 
   var previewRowsHtml = preview.map(function(e){
     var statusHtml;
@@ -4238,6 +4811,11 @@ function renderAttPasteMapBox(){
       '</div>' +
       '<button class="btn-outline" onclick="applyAttPasteWeekdayPatternNow()">ใช้รูปแบบนี้กับทุกคอลัมน์</button>' +
     '</div>' +
+    '<div style="background:#F5F2EA; border-radius:6px; padding:10px 12px; margin-top:12px; font-size:14px; color:var(--ink);">' +
+      '<div style="font-weight:600; margin-bottom:6px;">วิธีนำเข้า</div>' +
+      '<label style="display:block; margin-bottom:4px; cursor:pointer;"><input type="radio" name="attPasteMode" '+(!attReplace?"checked":"")+' onchange="setAttPasteMode(\'update\')"/> อัปเดต — เปลี่ยนเฉพาะช่องที่มีค่า (ช่องว่าง = ข้าม คงค่าเดิมไว้)</label>' +
+      '<label style="display:block; cursor:pointer;"><input type="radio" name="attPasteMode" '+(attReplace?"checked":"")+' onchange="setAttPasteMode(\'replace\')"/> แทนที่ — รีเซ็ตเวลาเรียนของนักเรียนทุกคนเป็น "มาเรียน" ก่อน แล้วใส่ตามข้อมูลที่วาง (ช่องว่าง = มาเรียน, นักเรียนที่ไม่อยู่ในข้อมูลที่วางจะกลับเป็นมาเรียนทั้งหมด)</label>' +
+    '</div>' +
     '<div class="table-scroll"><table style="border-collapse:collapse; width:100%; min-width:'+(numCols*130)+'px;">' +
       '<thead>'+headerRowHtml+'</thead><tbody>'+sampleRowsHtml+'</tbody>' +
     '</table></div>' +
@@ -4267,7 +4845,7 @@ function renderAttPasteMapBox(){
       '</div>'
     ) +
     '<div style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;">' +
-      '<button class="btn-solid" '+(attPasteCanConfirm()?'':'disabled')+' onclick="confirmAttPasteImport()">'+icon("plus",15)+' ยืนยันนำเข้า '+willImport+' คน</button>' +
+      '<button class="btn-solid" '+(attPasteCanConfirm()?'':'disabled')+' onclick="confirmAttPasteImport()">'+icon("plus",15)+(attReplace ? ' ยืนยันแทนที่ข้อมูลเวลาเรียน ('+willImport+' คน)' : ' ยืนยันนำเข้า '+willImport+' คน')+'</button>' +
       '<button class="btn-outline" onclick="backToAttPaste()">ย้อนกลับ</button>' +
       '<button class="btn-outline" onclick="closeAttPasteImport()">ยกเลิก</button>' +
     '</div>' +
@@ -4635,6 +5213,10 @@ function renderStructure(s, comp){
       '<button class="btn-outline" onclick="addMultipleStructureItems(\'before\')">'+icon("plus",15)+' เพิ่มหลายตัวชี้วัด (ก่อนกลางภาค)</button>' +
       '<button class="btn-outline" onclick="addMultipleStructureItems(\'after\')">'+icon("plus",15)+' เพิ่มหลายตัวชี้วัด (หลังกลางภาค)</button>' +
       '<button class="btn-outline" onclick="openStructPasteImport()">'+icon("upload",15)+' วางโครงสร้างจาก Excel</button>' +
+    '</div>' +
+    '<div class="sa-title" style="margin-top:14px;">ลบรายการ</div>' +
+    '<div class="sa-grid">' +
+      '<button class="btn-outline" style="border-color:#B3432E; color:#B3432E;" onclick="deleteAllStructureItems()">'+icon("trash",15,"#B3432E")+' ลบรายการโครงสร้างทั้งหมด</button>' +
     '</div>' +
     renderStructPasteUndoInline() +
   '</div>' +
@@ -6174,6 +6756,675 @@ var _r=window.rerender; window.rerender=function(){ var x=_r.apply(this,argument
 window.addEventListener("beforeprint",clearMarks); window.addEventListener("afterprint",apply);
 })();
 </script>
+<style>
+/* ===== ระบบคัดลอกข้อมูลไปวางข้างนอก ===== */
+.cp-bar{ max-width:1100px; margin:0 0 16px; }
+.cp-toggle{ background:#fff; }
+.cp-toggle svg{ flex-shrink:0; }
+.cp-panel{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-top:10px; }
+.cp-top{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
+.cp-title{ font-size:16px; font-weight:700; color:var(--ink); }
+.cp-sub{ font-size:13px; color:var(--gray); margin-bottom:10px; line-height:1.5; }
+.cp-top select, .cp-opt select{ padding:5px 8px; border:1px solid var(--line); border-radius:6px; font-size:14px; background:#fff; }
+.cp-sec{ font-size:13px; font-weight:600; color:var(--gray); margin:12px 0 6px; }
+.cp-presets{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px; }
+.cp-presets button{ border:1px solid var(--line); background:#F7F6F1; color:var(--ink); border-radius:999px; padding:3px 12px; font-size:13.5px; cursor:pointer; }
+.cp-presets button:hover{ background:#EFEBDD; }
+.cp-group{ margin-bottom:8px; }
+.cp-ghead{ display:flex; align-items:center; gap:10px; font-size:13px; margin-bottom:4px; }
+.cp-gtitle{ font-weight:700; color:var(--ink); }
+.cp-ghead a{ color:#2F6FED; cursor:pointer; text-decoration:none; font-size:12.5px; }
+.cp-ghead a:hover{ text-decoration:underline; }
+.cp-chips{ display:flex; flex-wrap:wrap; gap:6px; }
+.cp-chip{ display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border:1px solid var(--line); border-radius:999px; font-size:14px; cursor:pointer; background:#fff; user-select:none; }
+.cp-chip.on{ background:#E8EEF7; border-color:#8AA8CC; color:var(--ink-deep); font-weight:600; }
+.cp-chip input{ margin:0; }
+.cp-opts{ display:flex; flex-wrap:wrap; gap:8px 22px; align-items:center; }
+.cp-opt{ display:inline-flex; align-items:center; gap:6px; font-size:14px; cursor:pointer; }
+.cp-num{ width:62px; padding:4px 6px; border:1px solid var(--line); border-radius:4px; text-align:center; font-size:14px; }
+.cp-prev{ overflow-x:auto; border:1px solid var(--line); border-radius:6px; max-width:100%; }
+.cp-grid{ display:grid; width:max-content; min-width:100%; font-size:13.5px; }
+.cp-pc{ padding:3px 8px; border-right:1px solid var(--line); border-bottom:1px solid var(--line); text-align:center; white-space:nowrap; background:#fff; }
+.cp-pc.cp-pl{ text-align:left; }
+.cp-pc.cp-ph{ background:#F1EEE6; font-weight:600; color:var(--ink); }
+.cp-pc.cp-pt{ background:#F7F6F1; font-weight:700; }
+.cp-note{ font-size:12.5px; color:var(--gray); margin-top:5px; }
+.cp-actions{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px; }
+.cp-msg{ font-size:14.5px; font-weight:600; }
+.cp-msg.ok{ color:var(--green); }
+.cp-msg.err{ color:var(--red); }
+.cp-empty{ font-size:14.5px; color:var(--gray); padding:6px 0; }
+@media print{ .cp-bar{ display:none !important; } }
+</style>
+<script>
+/* ===== ระบบคัดลอกข้อมูลจากโปรแกรมไปวางข้างนอก =====
+   - เลือกได้ว่าจะคัดลอกคอลัมน์ไหนบ้าง (ชื่อ / เลขประจำตัว / เวลาเรียนรายวัน / คะแนนแต่ละรายการ / เกรด ฯลฯ)
+   - ทำงานเฉพาะการ "อ่านข้อมูล" ไม่แก้ข้อมูลในโปรแกรม และไม่กระทบระบบเดิม
+   - ค่าที่ติ๊กเลือกไว้จะจำไว้ในเครื่องนี้ (localStorage) แยกจากข้อมูลวิชา */
+(function(){
+"use strict";
+
+var PREF_KEY = "pt05_copy_prefs_v1";
+var prefs = { cols:{}, opts:{} };
+try{
+  var rawPrefs = localStorage.getItem(PREF_KEY);
+  if (rawPrefs){
+    var pp = JSON.parse(rawPrefs);
+    if (pp && typeof pp === "object"){ prefs.cols = pp.cols || {}; prefs.opts = pp.opts || {}; }
+  }
+}catch(e){}
+function savePrefs(){ try{ localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); }catch(e){} }
+
+var ST = { open:{}, ds:{}, range:{}, msgTimer:null, lastSubj:null };
+var CUR = null; // ชุดข้อมูลที่กำลังแสดงในแผงคัดลอก
+
+function O(dsId, key, def){
+  var o = prefs.opts[dsId];
+  return (o && Object.prototype.hasOwnProperty.call(o, key)) ? o[key] : def;
+}
+
+var COPY_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+
+/* ---------- แยกคำนำหน้า / ชื่อ / นามสกุล ---------- */
+var NAME_PREFIXES = ["เด็กชาย","เด็กหญิง","นางสาว","ว่าที่ร้อยตรี","ด.ช.","ด.ญ.","น.ส.","นาย","นาง"]
+  .sort(function(a,b){ return b.length - a.length; });
+function splitName(full){
+  var t = String(full || "").replace(/\s+/g, " ").trim();
+  var prefix = "";
+  for (var i = 0; i < NAME_PREFIXES.length; i++){
+    if (t.indexOf(NAME_PREFIXES[i]) === 0){ prefix = NAME_PREFIXES[i]; t = t.slice(prefix.length).trim(); break; }
+  }
+  var parts = t ? t.split(" ") : [];
+  return { prefix:prefix, first:parts[0] || "", last:parts.slice(1).join(" ") };
+}
+
+var G_STUDENT = "ข้อมูลนักเรียน";
+var G_SPLIT = "แยกส่วนของชื่อ (ถ้าต้องการ)";
+function studentCols(opt){
+  opt = opt || {};
+  return [
+    { key:"no", label:"เลขที่", group:G_STUDENT, def:true, get:function(r){ return r.no; } },
+    { key:"sid", label:"เลขประจำตัว", group:G_STUDENT, def:!!opt.sid, text:true, get:function(r){ return r.sid; } },
+    { key:"name", label:"ชื่อ - นามสกุล", group:G_STUDENT, def:true, isName:true, get:function(r){ return r.name; } },
+    { key:"prefix", label:"คำนำหน้า", group:G_SPLIT, def:false, isName:true, get:function(r){ return splitName(r.name).prefix; } },
+    { key:"first", label:"ชื่อ", group:G_SPLIT, def:false, isName:true, get:function(r){ return splitName(r.name).first; } },
+    { key:"last", label:"นามสกุล", group:G_SPLIT, def:false, isName:true, get:function(r){ return splitName(r.name).last; } },
+    { key:"firstlast", label:"ชื่อ นามสกุล (ไม่มีคำนำหน้า)", group:G_SPLIT, def:false, isName:true, get:function(r){ var n = splitName(r.name); return (n.first + " " + n.last).trim(); } }
+  ];
+}
+function isBlocked(r){ return !!(r.isTransfer || r.resultStatus === "มส"); }
+
+/* ---------- ชุดข้อมูลของแต่ละหน้า ---------- */
+function dsRoster(s, comp, id){
+  return { studentRows:true, cols:studentCols({ sid:true }), rows:comp.rows };
+}
+
+function transferIndexOf(s, r){
+  return r.transferSessionId ? s.sessions.findIndex(function(x){ return x.id === r.transferSessionId; }) : -1;
+}
+function attCell(s, r, sess, idx, presentMark){
+  if (sess.holiday) return "";
+  var tIdx = transferIndexOf(s, r);
+  if (tIdx !== -1 && idx > tIdx) return "";
+  var a = (s.attendance[r.id] || {})[sess.id];
+  if (!a || a === "present") return presentMark;
+  return (ATT_STYLE[a] && ATT_STYLE[a].label) || "";
+}
+function countStatus(s, r, status){
+  if (isBlocked(r)) return "";
+  var tIdx = transferIndexOf(s, r), att = s.attendance[r.id] || {}, n = 0;
+  s.sessions.forEach(function(sess, i){
+    if (sess.holiday) return;
+    if (tIdx !== -1 && i > tIdx) return;
+    if (att[sess.id] === status) n++;
+  });
+  return n;
+}
+function dsAttGrid(s, comp, id){
+  var labels = attPasteSessionLabels(s);
+  var mark = O(id, "presentMark", "/");
+  var cols = studentCols({});
+  s.sessions.forEach(function(sess, idx){
+    var hol = !!sess.holiday;
+    var label = hol ? ((sess.day || "-") + " " + (sess.month ? sess.month.slice(0,3) : "") + " (หยุด)") : labels[sess.id];
+    cols.push({
+      key:"s:" + sess.id, label:label, group:(sess.month || "ไม่ระบุเดือน"), def:!hol,
+      get:function(r){ return attCell(s, r, sess, idx, mark); }
+    });
+  });
+  var G = "สรุปเวลาเรียน";
+  cols.push({ key:"hours", label:"ชม.ที่มาเรียน", group:G, def:true, fill:true, get:function(r){ return r.hoursEarned; } });
+  cols.push({ key:"pct", label:"เวลาเรียน (%)", group:G, def:true, fill:true, get:function(r){ return r.attPercent; } });
+  cols.push({ key:"absent", label:"ขาด (ครั้ง)", group:G, def:false, fill:true, get:function(r){ return r.absentCount; } });
+  cols.push({ key:"late", label:"สาย (ครั้ง)", group:G, def:false, fill:true, get:function(r){ return countStatus(s, r, "late"); } });
+  cols.push({ key:"leave", label:"ลา (ครั้ง)", group:G, def:false, fill:true, get:function(r){ return r.leaveCount; } });
+  cols.push({ key:"sick", label:"ป่วย (ครั้ง)", group:G, def:false, fill:true, get:function(r){ return r.sickCount; } });
+  cols.push({ key:"transfer", label:"ย้ายตั้งแต่", group:G, def:true, get:function(r){
+    var ts = s.sessions.filter(function(x){ return x.id === r.transferSessionId; })[0];
+    return ts ? ((ts.day || "-") + " " + (ts.month ? ts.month.slice(0,3) : "")) : "";
+  } });
+  cols.push({ key:"status", label:"สถานะ (ร/มส/ย้าย)", group:G, def:false, get:function(r){ return r.resultStatus; } });
+  return {
+    studentRows:true, cols:cols, rows:comp.rows,
+    opts:[{ key:"presentMark", type:"select", def:"/", label:"วันที่มาเรียนให้แสดงเป็น",
+      choices:[["/","/ (ขีดเฉียง)"],["ม","ม"],["✓","✓"],["1","1"],["","เว้นว่าง"]] }]
+  };
+}
+function dsAttSessions(s, comp, id){
+  var G = "รายการวันเรียน";
+  return {
+    studentRows:false,
+    rows:s.sessions,
+    cols:[
+      { key:"idx", label:"ที่", group:G, def:true, get:function(r, i){ return i + 1; } },
+      { key:"month", label:"เดือน", group:G, def:true, get:function(r){ return r.month; } },
+      { key:"day", label:"วันที่", group:G, def:true, get:function(r){ return r.day; } },
+      { key:"weekday", label:"วัน", group:G, def:true, get:function(r){ return r.weekday || ""; } },
+      { key:"hours", label:"ชั่วโมง", group:G, def:true, get:function(r){ return r.holiday ? 0 : 1; } },
+      { key:"holiday", label:"วันหยุด", group:G, def:true, get:function(r){ return r.holiday ? "หยุด" : ""; } },
+      { key:"note", label:"หมายเหตุ", group:G, def:true, get:function(r){ return r.note || ""; } }
+    ]
+  };
+}
+
+function dsScores(s, comp, id){
+  var gp = O(id, "groupPrefix", false), showMax = O(id, "showMax", true);
+  var before = s.structure.filter(function(it){ return it.type === "collect" && (it.period || "before") === "before"; });
+  var after = s.structure.filter(function(it){ return it.type === "collect" && it.period === "after"; });
+  var mid = s.structure.filter(function(it){ return it.type === "exam" && (it.period || "midterm") === "midterm"; });
+  var fin = s.structure.filter(function(it){ return it.type === "exam" && it.period === "final"; });
+  var cols = studentCols({});
+  function addItems(items, groupLabel){
+    items.forEach(function(it){
+      var showsBar = it.type === "collect" || examItemNeedsIndicatorBar(it, items);
+      var base = structureItemLabelInGroup(it, items) + ((showsBar && it.name) ? (" " + it.name) : "");
+      var label = ((gp && base.indexOf(groupLabel) !== 0) ? (groupLabel + " ") : "") + base + (showMax ? (" (เต็ม " + it.max + ")") : "");
+      cols.push({
+        key:"it:" + it.id, label:label, group:groupLabel, def:true,
+        get:function(r){
+          if (isBlocked(r)) return "";
+          var sc = s.scores[r.id];
+          var v = sc && sc.items ? sc.items[it.id] : "";
+          return v === undefined ? "" : v;
+        }
+      });
+    });
+  }
+  addItems(before, "ก่อนกลางภาค");
+  addItems(after, "หลังกลางภาค");
+  addItems(mid, "สอบกลางภาค");
+  addItems(fin, "สอบปลายภาค");
+  var mode = getCourseMode(s);
+  var interimLabel = mode === "competency" ? "รวมระหว่างทาง (ก่อน+หลังกลางภาค)" : "คะแนนเก็บ + กลางภาค";
+  var finalGroupLabel = mode === "competency" ? "รวมปลายทาง (กลาง+ปลายภาค)" : "รวมปลายทาง";
+  var G = "ผลรวม / เกรด";
+  function raw(r, field){
+    if (isBlocked(r)) return "";
+    var sc = s.scores[r.id];
+    var v = sc ? sc[field] : "";
+    return v === undefined ? "" : v;
+  }
+  cols.push({ key:"collectBefore", label:"รวมคะแนนเก็บก่อนกลางภาค", group:G, def:true, fill:true, get:function(r){ return r.collectBeforeSum; } });
+  cols.push({ key:"collectAfter", label:"รวมคะแนนเก็บหลังกลางภาค", group:G, def:true, fill:true, get:function(r){ return r.collectAfterSum; } });
+  cols.push({ key:"collect", label:"รวมคะแนนเก็บ", group:G, def:true, fill:true, get:function(r){ return r.collectSum; } });
+  cols.push({ key:"midterm", label:"คะแนนกลางภาค", group:G, def:true, fill:true, get:function(r){ return r.midtermSum; } });
+  cols.push({ key:"makeupMid", label:"ช่องแก้ไข (แทนกลางภาค)", group:G, def:true, get:function(r){ return raw(r, "makeupMid"); } });
+  cols.push({ key:"interim", label:interimLabel, group:G, def:true, fill:true, get:function(r){ return r.interimSum; } });
+  cols.push({ key:"final", label:"คะแนนสอบปลายภาค", group:G, def:true, fill:true, get:function(r){ return r.finalSum; } });
+  cols.push({ key:"makeup", label:"ช่องแก้ไข (แทนปลายภาค)", group:G, def:true, get:function(r){ return raw(r, "makeup"); } });
+  cols.push({ key:"finalGroup", label:finalGroupLabel, group:G, def:true, fill:true, get:function(r){ return r.finalGroupSum; } });
+  cols.push({ key:"total", label:"คะแนนทั้งหมดรวมกัน", group:G, def:true, fill:true, get:function(r){ return r.total; } });
+  cols.push({ key:"grade", label:"เกรด", group:G, def:true, fill:true, get:function(r){ return r.grade; } });
+  cols.push({ key:"status", label:"สถานะ (ร/มส/ย้าย)", group:G, def:true, get:function(r){ return r.resultStatus; } });
+  return {
+    studentRows:true, cols:cols, rows:comp.rows,
+    opts:[
+      { key:"showMax", type:"check", def:true, label:"ใส่คะแนนเต็มต่อท้ายหัวคอลัมน์ เช่น (เต็ม 20)" },
+      { key:"groupPrefix", type:"check", def:false, label:"ใส่ชื่อกลุ่มนำหน้าหัวคอลัมน์ เช่น ก่อนกลางภาค ตัวชี้วัด 1" }
+    ]
+  };
+}
+
+function dsRating(items, scoresMap, avgField, lvlField, avgLabel){
+  return function(s, comp, id){
+    var fmt = O(id, "fmt", "num");
+    var cols = studentCols({});
+    var list = items(s);
+    var sm = scoresMap(s);
+    list.forEach(function(it){
+      cols.push({
+        key:"it:" + it.id, label:(it.name || "(ยังไม่ตั้งชื่อ)"), group:"หัวข้อประเมิน", def:true,
+        get:function(r){
+          if (isBlocked(r)) return "";
+          var v = (sm[r.id] || {})[it.id];
+          if (v === undefined || v === "" || v === null) return "";
+          return fmt === "text" ? (levelText(Number(v)) || v) : v;
+        }
+      });
+    });
+    cols.push({ key:"avg", label:"เฉลี่ย (เต็ม 3)", group:"ผลรวม", def:true, fill:true, get:function(r){ return r[avgField]; } });
+    cols.push({ key:"level", label:"ระดับคุณภาพ", group:"ผลรวม", def:true, fill:true, get:function(r){ return r[lvlField]; } });
+    return {
+      studentRows:true, cols:cols, rows:comp.rows,
+      opts:[{ key:"fmt", type:"select", def:"num", label:"คะแนนรายหัวข้อให้แสดงเป็น",
+        choices:[["num","ตัวเลข 0-3"],["text","ระดับ (ดีเยี่ยม/ดี/ผ่าน/ไม่ผ่าน)"]] }]
+    };
+  };
+}
+var dsDesirable = dsRating(function(s){ return s.desirable; }, function(s){ return s.desirableScores; }, "desirableAvg", "desirableLevelText");
+var dsReadWrite = dsRating(function(s){ return s.readWrite; }, function(s){ return s.readWriteScores; }, "readWriteAvg", "readWriteLevelText");
+
+function dsStructItems(s, comp, id){
+  var G = "โครงสร้างรายวิชา";
+  var items = structureSortedForDisplay(s);
+  function groupOf(it){
+    return it.type === "exam" ? s.structure.filter(function(x){
+      return x.type === "exam" && (x.period || "midterm") === (it.period || "midterm");
+    }) : null;
+  }
+  function hasBar(it){ return it.type === "collect" || examItemNeedsIndicatorBar(it, groupOf(it)); }
+  return {
+    studentRows:false, totalRow:true, rows:items,
+    cols:[
+      { key:"idx", label:"ที่", group:G, def:true, get:function(r, i){ return i + 1; } },
+      { key:"item", label:"ตัวชี้วัด / รายการ", group:G, def:true, get:function(r){ return structureItemLabelInGroup(r, groupOf(r)); } },
+      { key:"name", label:"ชื่อรายการ / คำอธิบาย", group:G, def:true, get:function(r){ return hasBar(r) ? (r.name || "") : (r.desc || ""); } },
+      { key:"type", label:"ประเภท", group:G, def:true, get:function(r){ return r.type === "collect" ? "คะแนนเก็บ (ตัวชี้วัด)" : "คะแนนสอบ"; } },
+      { key:"period", label:"ช่วงเวลา", group:G, def:true, get:function(r){
+        return r.type === "collect" ? ((r.period || "before") === "before" ? "ก่อนกลางภาค" : "หลังกลางภาค")
+          : ((r.period || "midterm") === "midterm" ? "กลางภาค" : "ปลายภาค");
+      } },
+      { key:"max", label:"คะแนนเต็ม", group:G, def:true, get:function(r){ return r.max; },
+        total:function(rows){ return rows.reduce(function(sum, it){ return sum + (Number(it.max) || 0); }, 0); } }
+    ],
+    opts:[{ key:"totalRow", type:"check", def:false, label:"เพิ่มแถวรวมคะแนนเต็มท้ายตาราง" }]
+  };
+}
+function dsNameList(listFn, title){
+  return function(s, comp, id){
+    return {
+      studentRows:false, rows:listFn(s),
+      cols:[
+        { key:"idx", label:"ที่", group:title, def:true, get:function(r, i){ return i + 1; } },
+        { key:"name", label:"ชื่อ", group:title, def:true, get:function(r){ return r.name || ""; } }
+      ]
+    };
+  };
+}
+
+function dsSumPeople(s, comp, id){
+  var cols = studentCols({});
+  var G = "ผลการเรียน";
+  cols.push({ key:"hours", label:"ชม.ที่มาเรียน", group:G, def:false, fill:true, get:function(r){ return r.hoursEarned; } });
+  cols.push({ key:"pct", label:"เวลาเรียน (%)", group:G, def:true, fill:true, get:function(r){ return r.attPercent; } });
+  cols.push({ key:"collect", label:"รวมคะแนนเก็บ", group:G, def:false, fill:true, get:function(r){ return r.collectSum; } });
+  cols.push({ key:"midterm", label:"คะแนนกลางภาค", group:G, def:false, fill:true, get:function(r){ return r.midtermSum; } });
+  cols.push({ key:"final", label:"คะแนนสอบปลายภาค", group:G, def:false, fill:true, get:function(r){ return r.finalSum; } });
+  cols.push({ key:"total", label:"คะแนนรวม", group:G, def:true, fill:true, get:function(r){ return r.total; } });
+  cols.push({ key:"grade", label:"เกรด", group:G, def:true, fill:true, get:function(r){ return r.grade; } });
+  cols.push({ key:"des", label:"คุณลักษณะอันพึงประสงค์", group:G, def:true, fill:true, get:function(r){ return r.desirableLevelText; } });
+  cols.push({ key:"rw", label:"อ่าน เขียน คิดวิเคราะห์", group:G, def:true, fill:true, get:function(r){ return r.readWriteLevelText; } });
+  cols.push({ key:"status", label:"สถานะ (ร/มส/ย้าย)", group:G, def:true, get:function(r){ return r.resultStatus; } });
+  return { studentRows:true, cols:cols, rows:comp.rows };
+}
+function dsSumGrades(s, comp, id){
+  var rows = GRADE_LEVELS.map(function(g){ return { label:String(g), n:comp.gradeCounts[g] || 0 }; });
+  rows.push({ label:"ร", n:comp.rCount });
+  rows.push({ label:"มส", n:comp.msCount });
+  var total = comp.totalStudents;
+  var G = "จำนวนนักเรียนแยกตามเกรด";
+  return {
+    studentRows:false, rows:rows,
+    cols:[
+      { key:"grade", label:"เกรด", group:G, def:true, get:function(r){ return r.label; } },
+      { key:"n", label:"จำนวน (คน)", group:G, def:true, get:function(r){ return r.n; } },
+      { key:"pct", label:"ร้อยละ", group:G, def:true, get:function(r){ return total ? (Math.round((r.n / total) * 10000) / 100) : 0; } }
+    ]
+  };
+}
+
+function dsYear(s, comp, id){
+  var yr = getYearRecord();
+  if (!yr || !yr.term1Id || !yr.term2Id) return { empty:"เลือกวิชาภาคเรียนที่ 1 และภาคเรียนที่ 2 ในหน้านี้ก่อน จึงจะคัดลอกตารางตัดเกรดทั้งปีได้" };
+  var ys = computeYearSummary(yr);
+  if (!ys) return { empty:"ไม่พบข้อมูลวิชาที่เลือกไว้ กรุณาเลือกวิชาใหม่ก่อน" };
+  var cols = studentCols({ sid:true });
+  var G = "ผลทั้งปี";
+  cols.push({ key:"att", label:"เวลาเรียน (%)", group:G, def:true, fill:true, get:function(r){ return r.attPercent; } });
+  cols.push({ key:"t1", label:"คะแนนเทอม 1", group:G, def:true, fill:true, get:function(r){ return r.term1Total; } });
+  cols.push({ key:"t2", label:"คะแนนเทอม 2", group:G, def:true, fill:true, get:function(r){ return r.term2Total; } });
+  cols.push({ key:"yt", label:"คะแนนรวมปี (เต็ม 100)", group:G, def:true, fill:true, get:function(r){ return r.yearTotal; } });
+  cols.push({ key:"yg", label:"เกรด", group:G, def:true, fill:true, get:function(r){ return r.yearGrade; } });
+  cols.push({ key:"des", label:"คุณลักษณะ", group:G, def:true, fill:true, get:function(r){ return r.desirableLevelText; } });
+  cols.push({ key:"rw", label:"อ่านฯ เขียน", group:G, def:true, fill:true, get:function(r){ return r.readWriteLevelText; } });
+  cols.push({ key:"note", label:"หมายเหตุ", group:G, def:true, get:function(r){ return r.note || ""; } });
+  return { studentRows:true, canExcludeTransfer:false, cols:cols, rows:ys.rows };
+}
+
+var TAB_DS = {
+  roster:[["roster", "รายชื่อนักเรียน", dsRoster]],
+  attendance:[["att-grid", "ตารางเช็คเวลาเรียนของนักเรียน", dsAttGrid], ["att-sessions", "รายการวันเรียน (เดือน / วันที่ / วันหยุด)", dsAttSessions]],
+  scores:[["scores", "ตารางคะแนน", dsScores]],
+  desirable:[["desirable", "คุณลักษณะอันพึงประสงค์", dsDesirable]],
+  readwrite:[["readwrite", "อ่าน เขียน คิดวิเคราะห์", dsReadWrite]],
+  structure:[
+    ["struct-items", "ตารางโครงสร้างคะแนน", dsStructItems],
+    ["struct-des", "รายชื่อคุณลักษณะอันพึงประสงค์", dsNameList(function(s){ return s.desirable; }, "รายชื่อคุณลักษณะอันพึงประสงค์")],
+    ["struct-rw", "รายชื่อการอ่าน เขียน คิดวิเคราะห์", dsNameList(function(s){ return s.readWrite; }, "รายชื่อการอ่าน เขียน คิดวิเคราะห์")]
+  ],
+  summary:[["sum-people", "สรุปผลรายบุคคล", dsSumPeople], ["sum-grades", "จำนวนนักเรียนแยกตามเกรด", dsSumGrades]],
+  yeargrade:[["year", "ตารางตัดเกรดทั้งปี", dsYear]]
+};
+
+/* ---------- ตัวสร้างตารางที่จะคัดลอก ---------- */
+function commonOpts(ds){
+  var list = [{ key:"header", type:"check", def:true, label:"ใส่แถวหัวตาราง" }];
+  if (ds.studentRows){
+    list.push({ key:"tidy", type:"check", def:true, label:"ลดช่องว่างซ้ำในชื่อให้เหลือเว้นวรรคเดียว" });
+    if (ds.canExcludeTransfer !== false) list.push({ key:"noTransfer", type:"check", def:false, label:"ไม่รวมนักเรียนที่ย้ายออก" });
+  }
+  if (ds.hasFill) list.push({ key:"blankAs", type:"select", def:"", label:"ช่องที่ยังไม่มีข้อมูลให้แสดงเป็น",
+    choices:[["","เว้นว่าง"],["-","ขีด ( - )"],["0","เลข 0"]] });
+  return list.concat(ds.opts || []);
+}
+function optVal(ds, key){
+  var all = commonOpts(ds);
+  for (var i = 0; i < all.length; i++){ if (all[i].key === key) return O(ds.id, key, all[i].def); }
+  return undefined;
+}
+function isSel(ds, c){
+  var m = prefs.cols[ds.id];
+  return (m && Object.prototype.hasOwnProperty.call(m, c.key)) ? !!m[c.key] : !!c.def;
+}
+function setSel(ds, c, on){
+  if (!prefs.cols[ds.id]) prefs.cols[ds.id] = {};
+  prefs.cols[ds.id][c.key] = !!on;
+}
+
+function matrixOf(ds){
+  var cols = ds.cols.filter(function(c){ return isSel(ds, c); });
+  var rows = ds.rows.slice();
+  var tidy = false;
+  if (ds.studentRows){
+    tidy = !!optVal(ds, "tidy");
+    if (ds.canExcludeTransfer !== false && optVal(ds, "noTransfer")) rows = rows.filter(function(r){ return !r.isTransfer; });
+    var rg = ST.range[ds.id] || {};
+    var from = parseInt(rg.from, 10), to = parseInt(rg.to, 10);
+    if (!isNaN(from)) rows = rows.filter(function(r){ return Number(r.no) >= from; });
+    if (!isNaN(to)) rows = rows.filter(function(r){ return Number(r.no) <= to; });
+  }
+  var blankAs = ds.hasFill ? (optVal(ds, "blankAs") || "") : "";
+  function cell(c, r, i){
+    var v = c.get(r, i);
+    if (v === null || v === undefined || v === false) v = "";
+    v = String(v);
+    if (c.fill && v === "") v = blankAs;
+    if (c.isName && tidy) v = v.replace(/\s+/g, " ").trim();
+    return v;
+  }
+  var body = rows.map(function(r, i){ return cols.map(function(c){ return cell(c, r, i); }); });
+  var total = null;
+  if (ds.totalRow && optVal(ds, "totalRow") && cols.length){
+    var labelled = false;
+    total = cols.map(function(c){
+      if (c.total) return String(c.total(rows));
+      if (!labelled){ labelled = true; return "รวม"; }
+      return "";
+    });
+  }
+  return { cols:cols, head:cols.map(function(c){ return c.label; }), body:body, total:total, hasHead:!!optVal(ds, "header") };
+}
+function oneLine(v){ return String(v).replace(/[\t\r\n]+/g, " "); }
+function toTsv(m){
+  var lines = [];
+  if (m.hasHead) lines.push(m.head.map(oneLine).join("\t"));
+  m.body.forEach(function(row){ lines.push(row.map(oneLine).join("\t")); });
+  if (m.total) lines.push(m.total.map(oneLine).join("\t"));
+  return lines.join("\n");
+}
+function toHtml(m){
+  var TD = "border:1px solid #888;padding:3px 6px;";
+  function tdFor(c, v, bold){
+    var st = TD + "text-align:" + (c.isName ? "left" : "center") + ";" + (bold ? "font-weight:bold;" : "") + (c.text ? "mso-number-format:'\\@';" : "");
+    return '<td style="' + st + '">' + esc(v) + '</td>';
+  }
+  var h = '<meta charset="utf-8"><table border="1" cellspacing="0" cellpadding="3" style="border-collapse:collapse;">';
+  if (m.hasHead){
+    h += '<thead><tr>' + m.head.map(function(t){
+      return '<th style="' + TD + 'background:#F1EEE6;text-align:center;">' + esc(t) + '</th>';
+    }).join("") + '</tr></thead>';
+  }
+  h += '<tbody>';
+  m.body.forEach(function(row){
+    h += '<tr>' + row.map(function(v, ci){ return tdFor(m.cols[ci], v, false); }).join("") + '</tr>';
+  });
+  if (m.total) h += '<tr>' + m.total.map(function(v, ci){ return tdFor(m.cols[ci], v, true); }).join("") + '</tr>';
+  h += '</tbody></table>';
+  return h;
+}
+
+/* ---------- คัดลอกลงคลิปบอร์ด ---------- */
+function legacyCopy(html, text, asText){
+  var ok = false;
+  try{
+    if (asText){
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.setAttribute("readonly", "");
+      ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;";
+      document.body.appendChild(ta); ta.select();
+      ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+    } else {
+      var d = document.createElement("div");
+      d.innerHTML = html;
+      d.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;white-space:pre;";
+      document.body.appendChild(d);
+      var rg = document.createRange(); rg.selectNodeContents(d);
+      var sl = window.getSelection(); sl.removeAllRanges(); sl.addRange(rg);
+      ok = document.execCommand("copy");
+      sl.removeAllRanges();
+      document.body.removeChild(d);
+    }
+  }catch(e){ ok = false; }
+  return ok;
+}
+function showMsg(text, ok){
+  var el = document.getElementById("cpMsg");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "cp-msg " + (ok ? "ok" : "err");
+  clearTimeout(ST.msgTimer);
+  ST.msgTimer = setTimeout(function(){ var e2 = document.getElementById("cpMsg"); if (e2){ e2.textContent = ""; e2.className = "cp-msg"; } }, 9000);
+}
+function doCopy(asText){
+  if (!CUR || !CUR.cols) return;
+  var m = matrixOf(CUR);
+  if (!m.cols.length){ showMsg("ติ๊กเลือกอย่างน้อย 1 คอลัมน์ก่อน", false); return; }
+  if (!m.body.length){ showMsg("ไม่มีแถวข้อมูลให้คัดลอก (ตรวจช่วงเลขที่ / ตัวเลือกด้านบน)", false); }
+  var text = toTsv(m), html = toHtml(m);
+  var info = m.body.length + " แถว × " + m.cols.length + " คอลัมน์";
+  function done(ok){
+    showMsg(ok ? ("คัดลอกแล้ว " + info + " — ไปกดวาง (Ctrl+V) ได้เลย") : "คัดลอกไม่สำเร็จ เบราว์เซอร์ไม่อนุญาต ลองกดอีกครั้ง", ok);
+  }
+  var cb = navigator.clipboard;
+  if (asText){
+    if (cb && cb.writeText && window.isSecureContext){
+      cb.writeText(text).then(function(){ done(true); }, function(){ done(legacyCopy(html, text, true)); });
+    } else done(legacyCopy(html, text, true));
+    return;
+  }
+  if (cb && cb.write && window.ClipboardItem && window.isSecureContext){
+    try{
+      var item = new ClipboardItem({
+        "text/html":new Blob([html], { type:"text/html" }),
+        "text/plain":new Blob([text], { type:"text/plain" })
+      });
+      cb.write([item]).then(function(){ done(true); }, function(){ done(legacyCopy(html, text, false)); });
+    }catch(e){ done(legacyCopy(html, text, false)); }
+  } else done(legacyCopy(html, text, false));
+}
+
+/* ---------- วาดแผงคัดลอก ---------- */
+function previewHtml(ds, m){
+  if (!m.cols.length) return '<div class="cp-empty">ยังไม่ได้เลือกคอลัมน์</div>';
+  var cells = "";
+  if (m.hasHead){
+    m.head.forEach(function(h){ cells += '<div class="cp-pc cp-ph">' + esc(h) + '</div>'; });
+  }
+  var LIMIT = 8;
+  m.body.slice(0, LIMIT).forEach(function(row){
+    row.forEach(function(v, ci){ cells += '<div class="cp-pc' + (m.cols[ci].isName ? ' cp-pl' : '') + '">' + esc(v) + '</div>'; });
+  });
+  if (m.total){
+    m.total.forEach(function(v, ci){ cells += '<div class="cp-pc cp-pt' + (m.cols[ci].isName ? ' cp-pl' : '') + '">' + esc(v) + '</div>'; });
+  }
+  var more = m.body.length > LIMIT ? ('แสดงตัวอย่าง ' + LIMIT + ' จาก ' + m.body.length + ' แถว · ') : '';
+  return '<div class="cp-prev"><div class="cp-grid" style="grid-template-columns:repeat(' + m.cols.length + ', max-content);">' + cells + '</div></div>' +
+    '<div class="cp-note">' + more + 'จะคัดลอก ' + m.body.length + ' แถว × ' + m.cols.length + ' คอลัมน์' + (m.hasHead ? ' (รวมแถวหัวตารางแล้ว)' : ' (ไม่รวมแถวหัวตาราง)') + '</div>';
+}
+function optHtml(ds, o){
+  var v = O(ds.id, o.key, o.def);
+  if (o.type === "check"){
+    return '<label class="cp-opt"><input type="checkbox" ' + (v ? 'checked' : '') + ' onchange="PTCOPY.opt(\'' + o.key + '\', this.checked)"/> ' + esc(o.label) + '</label>';
+  }
+  var options = o.choices.map(function(ch){
+    return '<option value="' + esc(ch[0]) + '" ' + (String(v) === String(ch[0]) ? 'selected' : '') + '>' + esc(ch[1]) + '</option>';
+  }).join("");
+  return '<label class="cp-opt">' + esc(o.label) + ' <select onchange="PTCOPY.opt(\'' + o.key + '\', this.value)">' + options + '</select></label>';
+}
+function panelHtml(tab){
+  var list = TAB_DS[tab];
+  var entry = list.filter(function(e){ return e[0] === ST.ds[tab]; })[0] || list[0];
+  ST.ds[tab] = entry[0];
+  var s = getSubj();
+  var ds = entry[2](s, computeSubject(s), entry[0]);
+  var picker = list.length > 1
+    ? '<label class="cp-opt">ชุดข้อมูล <select onchange="PTCOPY.setDs(this.value)">' + list.map(function(e){
+        return '<option value="' + esc(e[0]) + '" ' + (e[0] === entry[0] ? 'selected' : '') + '>' + esc(e[1]) + '</option>';
+      }).join("") + '</select></label>'
+    : '<span style="font-size:14px; color:var(--gray);">' + esc(entry[1]) + '</span>';
+  var top = '<div class="cp-top"><span class="cp-title">คัดลอกข้อมูลไปวางข้างนอก</span>' + picker + '</div>';
+  if (!ds || ds.empty){
+    CUR = null;
+    return top + '<div class="cp-empty">' + esc((ds && ds.empty) || "ไม่มีข้อมูล") + '</div>';
+  }
+  ds.id = entry[0]; ds.title = entry[1];
+  ds.hasFill = ds.cols.some(function(c){ return c.fill; });
+  ds.groups = [];
+  ds.cols.forEach(function(c){ if (ds.groups.indexOf(c.group) === -1) ds.groups.push(c.group); });
+  CUR = ds;
+
+  var presets = '<button onclick="PTCOPY.preset(\'all\')">เลือกทั้งหมด</button>' +
+    '<button onclick="PTCOPY.preset(\'none\')">ล้างทั้งหมด</button>' +
+    '<button onclick="PTCOPY.preset(\'def\')">ค่าเริ่มต้น (เหมือนที่เห็นในหน้า)</button>' +
+    (ds.studentRows ? '<button onclick="PTCOPY.preset(\'name\')">ชื่อเท่านั้น</button><button onclick="PTCOPY.preset(\'noname\')">เลขที่ + ชื่อ</button>' : '');
+  var groupsHtml = ds.groups.map(function(g, gi){
+    var chips = ds.cols.map(function(c, i){
+      if (c.group !== g) return "";
+      var on = isSel(ds, c);
+      return '<label class="cp-chip' + (on ? ' on' : '') + '"><input id="cpc' + i + '" type="checkbox" ' + (on ? 'checked' : '') + ' onchange="PTCOPY.col(' + i + ', this.checked)"/> ' + esc(c.label) + '</label>';
+    }).join("");
+    var head = ds.groups.length > 1
+      ? '<div class="cp-ghead"><span class="cp-gtitle">' + esc(g) + '</span><a onclick="PTCOPY.group(' + gi + ', true)">เลือกทั้งกลุ่ม</a><a onclick="PTCOPY.group(' + gi + ', false)">ล้างกลุ่ม</a></div>'
+      : '';
+    return '<div class="cp-group">' + head + '<div class="cp-chips">' + chips + '</div></div>';
+  }).join("");
+
+  var opts = commonOpts(ds).map(function(o){ return optHtml(ds, o); }).join("");
+  var rg = ST.range[ds.id] || {};
+  var rangeHtml = ds.studentRows
+    ? '<label class="cp-opt">เฉพาะเลขที่ <input id="cpFrom" class="cp-num" inputmode="numeric" value="' + esc(rg.from || "") + '" onchange="PTCOPY.range()"/> ถึง <input id="cpTo" class="cp-num" inputmode="numeric" value="' + esc(rg.to || "") + '" onchange="PTCOPY.range()"/> <span style="color:var(--gray); font-size:13px;">(เว้นว่าง = ทุกคน)</span></label>'
+    : '';
+
+  var m = matrixOf(ds);
+  return top +
+    '<div class="cp-sub">ติ๊กเลือกคอลัมน์ที่ต้องการ แล้วกดคัดลอก จากนั้นไปกดวาง (Ctrl+V) ที่ Excel / Google Sheets / Word / LINE ได้เลย — ลำดับคอลัมน์ตามที่แสดงในหน้านี้</div>' +
+    '<div class="cp-sec">เลือกคอลัมน์ที่จะคัดลอก</div>' +
+    '<div class="cp-presets">' + presets + '</div>' + groupsHtml +
+    '<div class="cp-sec">ตัวเลือก</div><div class="cp-opts">' + opts + rangeHtml + '</div>' +
+    '<div class="cp-sec">ตัวอย่างสิ่งที่จะคัดลอก</div>' + previewHtml(ds, m) +
+    '<div class="cp-actions">' +
+      '<button class="btn-solid" onclick="PTCOPY.copy(false)">' + COPY_ICON + ' คัดลอก (วางเป็นตารางใน Excel / Word)</button>' +
+      '<button class="btn-outline" onclick="PTCOPY.copy(true)">คัดลอกเป็นข้อความล้วน (LINE / Notepad)</button>' +
+      '<span id="cpMsg" class="cp-msg"></span>' +
+    '</div>';
+}
+function barHtml(tab){
+  var open = !!ST.open[tab];
+  return '<button class="btn-outline cp-toggle" onclick="PTCOPY.toggle()">' + COPY_ICON + (open ? ' ปิดส่วนคัดลอกข้อมูล' : ' คัดลอกข้อมูลหน้านี้ไปวางข้างนอก') + '</button>' +
+    (open ? '<div class="cp-panel">' + panelHtml(tab) + '</div>' : '');
+}
+function hostEl(){ return document.getElementById("cpRoot"); }
+function refresh(){
+  var host = hostEl();
+  if (!host) return;
+  var a = document.activeElement, fid = a && a.id && host.contains(a) ? a.id : null;
+  host.innerHTML = barHtml(UI.tab);
+  if (fid){ var e = document.getElementById(fid); if (e) e.focus(); }
+}
+function inject(){
+  var old = hostEl();
+  if (old && old.parentNode) old.parentNode.removeChild(old);
+  if (!TAB_DS[UI.tab]) return;
+  var main = document.querySelector(".app-shell .main");
+  if (!main) return;
+  var title = main.querySelector(".section-title");
+  if (!title) return;
+  if (ST.lastSubj !== DB.currentId){ ST.lastSubj = DB.currentId; ST.range = {}; }
+  var anchor = title, nx = title.nextElementSibling;
+  if (nx && nx.classList && nx.classList.contains("section-sub")) anchor = nx;
+  var host = document.createElement("div");
+  host.id = "cpRoot"; host.className = "cp-bar no-print";
+  anchor.parentNode.insertBefore(host, anchor.nextSibling);
+  host.innerHTML = barHtml(UI.tab);
+}
+
+/* ---------- ปุ่ม/ช่องที่เรียกจากหน้าเว็บ ---------- */
+window.PTCOPY = {
+  toggle:function(){ ST.open[UI.tab] = !ST.open[UI.tab]; refresh(); },
+  setDs:function(id){ ST.ds[UI.tab] = id; refresh(); },
+  col:function(i, on){ if (!CUR) return; setSel(CUR, CUR.cols[i], on); savePrefs(); refresh(); },
+  group:function(gi, on){
+    if (!CUR) return;
+    var g = CUR.groups[gi];
+    CUR.cols.forEach(function(c){ if (c.group === g) setSel(CUR, c, on); });
+    savePrefs(); refresh();
+  },
+  preset:function(kind){
+    if (!CUR) return;
+    if (kind === "def"){ delete prefs.cols[CUR.id]; }
+    else CUR.cols.forEach(function(c){
+      var on = kind === "all" ? true : kind === "none" ? false : kind === "name" ? (c.key === "name") : (c.key === "no" || c.key === "name");
+      setSel(CUR, c, on);
+    });
+    savePrefs(); refresh();
+  },
+  opt:function(key, val){
+    if (!CUR) return;
+    if (!prefs.opts[CUR.id]) prefs.opts[CUR.id] = {};
+    prefs.opts[CUR.id][key] = val;
+    savePrefs(); refresh();
+  },
+  range:function(){
+    if (!CUR) return;
+    var f = document.getElementById("cpFrom"), t = document.getElementById("cpTo");
+    ST.range[CUR.id] = { from:f ? f.value : "", to:t ? t.value : "" };
+    refresh();
+  },
+  copy:doCopy
+};
+
+/* ต่อท้าย rerender() เดิม: ทุกครั้งที่วาดหน้าใหม่ ให้เสียบแถบคัดลอกกลับเข้าไป */
+var prevRerender = window.rerender;
+window.rerender = function(){
+  var x = prevRerender.apply(this, arguments);
+  try{ inject(); }catch(err){ if (window.console) console.error("copy-module:", err); }
+  return x;
+};
+try{ inject(); }catch(err2){ if (window.console) console.error("copy-module:", err2); }
+})();
+</script>
+
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
