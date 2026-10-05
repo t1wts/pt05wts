@@ -100,9 +100,16 @@
   .sa-grid .btn-outline{ width:100%; justify-content:center; }
 
   .mobile-topbar{ display:none; }
+  /* ตัวอย่างหน้าปก: ลอยค้างตามเมื่อเลื่อนหน้ากรอกข้อมูล (จอคอม) · ถ้าจอเตี้ยกว่าตัวอย่าง เลื่อนดูในกล่องได้ */
   @media (min-width: 881px){
-    .sidebar{ position:sticky; top:0; align-self:flex-start; height:100vh; height:100dvh; overflow-y:auto; overflow-x:hidden; }
-    .sidebar > *{ flex-shrink:0; }
+    .cover-preview-col{ position:sticky; top:12px; align-self:flex-start; max-height:calc(100vh - 24px); overflow-y:auto; }
+  }
+  /* แถบเมนูสีน้ำเงินบนจอคอม: ล็อกอยู่กับที่ ไม่ยืดตามหน้า · ซ่อนแถบเลื่อน */
+  @media (min-width: 881px){
+    .sidebar{ position:sticky; top:0; align-self:flex-start; height:100vh; height:100dvh; overflow-y:auto; overflow-x:hidden;
+      scrollbar-width:none; -ms-overflow-style:none; }
+    .sidebar::-webkit-scrollbar{ display:none; }
+    .sidebar > *{ flex-shrink:0; zoom:var(--sbz,1); }   /* --sbz = สัดส่วนย่อ ให้ฟังก์ชัน fitSidebar() คำนวณให้พอดีความสูงจอ */
   }
 
   .field-grid{
@@ -271,6 +278,16 @@
       transform:translateX(-100%); transition:transform .2s ease; box-shadow:2px 0 14px rgba(0,0,0,0.25);
     }
     .sidebar.open{ transform:translateX(0); }
+    /* โทรศัพท์/จอเล็ก: บีบระยะห่างในเมนูให้กระชับ ถ้ายังไม่พอเมนูนี้เลื่อนขึ้นลงได้ */
+    .sidebar{ padding-top:10px; }
+    .brand{ padding:0 16px 8px; }
+    .subject-box{ padding:8px 14px; }
+    .subject-actions{ margin-top:6px; }
+    .nav{ padding:6px 10px; }
+    .nav-btn{ padding:7px 12px; margin-bottom:2px; font-size:16px; }
+    .data-controls{ padding:8px 14px; }
+    .save-note{ min-height:0; margin-bottom:4px; }
+    .side-btn{ padding:6px 10px; margin-bottom:5px; font-size:13px; }
     .sidebar > *{ flex-shrink:0; }
     .overlay.open{
       display:block; position:fixed; inset:0; background:rgba(0,0,0,0.35); z-index:30;
@@ -1953,6 +1970,14 @@ function onLevelInput(el, kind, studentId, itemId, rowIndex, colIndex, numCols){
         c0 = Math.min.apply(null, selected.map(function(c){ return parseInt(c.getAttribute("data-scol"), 10); }));
       }
       /* ตรวจก่อนวาง: เกินตาราง / ไม่ครบทุกแถว / มีค่าที่ไม่ใช่คะแนนที่ถูกต้อง → ถามยืนยันก่อน ถ้ากดยกเลิกจะไม่เปลี่ยนอะไรเลย */
+      /* แถวแรกเป็นหัวตาราง (ทุกช่องในแถวแรกไม่ใช่คะแนนที่ถูกต้อง) → ถามว่าจะข้ามแถวแรกไหม */
+      if (grid.length > 1){
+        var hdrCells = 0, hdrBad = 0;
+        grid[0].forEach(function(v, j){ var hc = cellAt(r0, c0 + j); if (!hc || hc.disabled || v === "") return; hdrCells++; if (!validFor(hc, v)) hdrBad++; });
+        var restBad = 0;
+        grid.slice(1).forEach(function(row, i){ row.forEach(function(v, j){ var rc = cellAt(r0 + 1 + i, c0 + j); if (rc && !rc.disabled && !validFor(rc, v)) restBad++; }); });
+        if (hdrCells > 0 && hdrBad === hdrCells && restBad === 0 && xlAskSkipHeader(grid)) grid = grid.slice(1);
+      }
       var allRows = Array.prototype.map.call(document.querySelectorAll("input[data-studentid]"), function(c){ return parseInt(c.getAttribute("data-srow"), 10); }).filter(function(n){ return !isNaN(n); });
       var maxRow = Math.max.apply(null, allRows);
       var rowsAvail = maxRow - r0 + 1;
@@ -2116,6 +2141,14 @@ function onLevelInput(el, kind, studentId, itemId, rowIndex, colIndex, numCols){
     if (startIdx < 0) return;
     var b = attBounds();
     var rowsAvail = b.maxR - r0 + 1;
+    /* แถวแรกเป็นหัวตาราง (ทุกช่องในแถวแรกไม่ใช่สถานะเวลาเรียน) → ถามว่าจะข้ามแถวแรกไหม */
+    if (grid.length > 1){
+      var hdrC = 0, hdrB = 0;
+      grid[0].forEach(function(v, j){ if (teachCols[startIdx + j] === undefined || v === "") return; hdrC++; if (attPasteNormalizeValue(v) === null) hdrB++; });
+      var restB = 0;
+      grid.slice(1).forEach(function(row){ row.forEach(function(v, j){ if (teachCols[startIdx + j] !== undefined && v !== "" && attPasteNormalizeValue(v) === null) restB++; }); });
+      if (hdrC > 0 && hdrB === hdrC && restB === 0 && xlAskSkipHeader(grid)) grid = grid.slice(1);
+    }
 
     var over = 0, bad = 0, badList = [], maxPastedCols = 0;
     grid.forEach(function(row, i){
@@ -2255,6 +2288,10 @@ function xlPasteBlocked(title, problems){
     "\n\nยังไม่มีการวางข้อมูลลงตาราง (ไม่เปลี่ยนแปลงอะไรเลย)\nกรุณาตรวจสอบข้อมูลที่คัดลอกและช่องที่เลือกวาง แล้วลองใหม่";
   window.alert(msg);
   xlToast("ยกเลิกการวาง" + title + ": มีข้อมูลไม่ตรงประเภทของช่อง", true);
+}
+/* แถวแรกของข้อมูลที่คัดลอกมาเป็นหัวตาราง (เช่น "คะแนน", "วันที่ 1") → ถามว่าจะข้ามแถวแรกไหม (ตกลง = ข้าม) */
+function xlAskSkipHeader(grid){
+  return window.confirm('แถวแรกของข้อมูลที่วางดูเหมือนหัวตาราง:\n\n"' + grid[0].filter(Boolean).join('"  "') + '"\n\nต้องการข้ามแถวแรก แล้ววางเฉพาะข้อมูลที่เหลือหรือไม่?\n(กด ตกลง = ข้ามแถวแรก · กด ยกเลิก = ไม่ข้าม)');
 }
 /* แถว/คอลัมน์เกินหรือไม่ครบ → ถามยืนยัน */
 function xlPasteConfirm(title, warns){
@@ -3991,10 +4028,12 @@ function renderCover(s, comp){
       '</div>' +
     '</div>' +
 
-    '<div style="flex:1 1 320px; min-width:280px; display:flex; justify-content:center; align-items:flex-start;">' +
-      '<div style="width:409px; height:610px; overflow:hidden; box-shadow:0 2px 12px rgba(0,0,0,0.18); background:white; position:relative;">' +
-        '<div class="cover-page" style="position:absolute; top:0; left:0; padding:0 46px 10px; line-height:1.1; color:#111; text-align:center; transform:scale(0.58); transform-origin:top left;">' +
-          renderCoverPageInner(s, comp, info) +
+    '<div class="cover-preview-col" style="flex:1 1 320px; min-width:280px; display:flex; justify-content:center; align-items:flex-start; overflow-x:auto;">' +
+      /* ขนาดตัวอย่าง: ปรับตัวเลข scale ได้ (0.85 = 85% ของหน้าจริง) ความกว้าง/สูงกล่อง = 703×scale / 1052×scale */
+      '<div style="width:598px; height:894px; flex-shrink:0; overflow:hidden; box-shadow:0 2px 12px rgba(0,0,0,0.18); background:white; position:relative;">' +
+        '<div class="cover-page" style="position:absolute; top:0; left:0; padding:0 46px 10px; line-height:1.1; color:#111; text-align:center; transform:scale(0.85); transform-origin:top left;">' +
+          /* เลื่อน "ปถ.05: บ" ลง 1 บรรทัดเฉพาะในตัวอย่างนี้ (ตอนพิมพ์ใช้ฟังก์ชันเดิม ไม่เปลี่ยน) */
+          renderCoverPageInner(s, comp, info).replace('font-weight:600; margin-bottom:4px;">ปถ.05: บ', 'font-weight:600; margin-top:1.1em; margin-bottom:4px;">ปถ.05: บ') +
         '</div>' +
       '</div>' +
     '</div>' +
@@ -5789,8 +5828,8 @@ function renderYearPrintAreas(){
   var subj1ForAttendance = Object.assign({}, subj1, { subject: subj1.subject + ' (ภาคเรียนที่ ' + (termNumberOnly(subj1.term) || "1") + ')' });
   var subj2ForAttendance = Object.assign({}, subj2, { subject: subj2.subject + ' (ภาคเรียนที่ ' + (termNumberOnly(subj2.term) || "2") + ')' });
 
-  var attendanceChunks1 = Math.max(1, attPageCount(subj1));
-  var attendanceChunks2 = Math.max(1, attPageCount(subj2));
+  var attendanceChunks1 = Math.max(1, Math.ceil(subj1.sessions.length / ATTENDANCE_CHUNK_SIZE));
+  var attendanceChunks2 = Math.max(1, Math.ceil(subj2.sessions.length / ATTENDANCE_CHUNK_SIZE));
   var attStart1 = 2;                             // ปก=ไม่นับเลขหน้า, รายชื่อ=1, เวลาเรียนเทอม1 (ละเอียด) เริ่มที่ 2
   var attStart2 = attStart1 + attendanceChunks1;
   var attSummaryPageNum = attStart2 + attendanceChunks2;  // หน้ารวมเวลาเรียน 2 เทอม อยู่หลังเวลาเรียนภาค 2
@@ -6021,7 +6060,7 @@ function renderPrintAreas(s, comp){
   }).join(" · ");
   var holidayDesc = s.sessions.filter(function(x){return x.holiday;}).map(function(x){ return esc(x.day)+' '+esc(x.month)+(x.note?(' ('+esc(x.note)+')'):''); }).join(", ");
 
-  var attendanceChunks = Math.max(1, attPageCount(s));
+  var attendanceChunks = Math.max(1, Math.ceil(s.sessions.length / ATTENDANCE_CHUNK_SIZE));
   var scoresStartPageNum = 2 + attendanceChunks;   // roster=1, attendance=2..(1+attendanceChunks)
   var structurePageNum = scoresStartPageNum + 5;    // after the 5 score sub-pages (ก่อน/หลังกลางภาค, สอบ, คุณลักษณะ+อ่านฯ, คะแนนรวม)
   var summaryPageNum = structurePageNum + 1;
@@ -6512,122 +6551,75 @@ function renderRosterPrintPage(s, info, pageNum){
   '</div>';
 }
 
-var ATT_WEEKS_PER_PAGE = 5;
-var ATT_MIN_WEEKS_LAST_PAGE = 4;
-var ATT_SLOTS_PER_WEEK = 6;
-var ATT_BLANK = { blank:true };   // ช่องของ "สัปดาห์ว่าง" ที่เติมให้หน้าสุดท้ายครบ (แสดงเป็นสีเทา)
-function attBuildWeeks(sessions, academicYear){
-  var weeks = [], cur = null, curKey = null;
-  (sessions || []).forEach(function(sess){
-    var d = sessionDate(sess, academicYear);
-    var wdIdx = THAI_WEEKDAYS_FULL.indexOf(sess.weekday);
-    if (wdIdx < 0 && d) wdIdx = d.getDay();
-    var key = null;
-    if (d){
-      var mon = new Date(d.getTime());
-      mon.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-      key = mon.getFullYear() * 10000 + (mon.getMonth() + 1) * 100 + mon.getDate();
-    }
-    if (!cur || (key !== null && curKey !== null && key !== curKey)){
-      cur = { days: [[], [], [], [], []], extras: [] };
-      weeks.push(cur); curKey = key;
-    } else if (curKey === null && key !== null){ curKey = key; }
-    if (wdIdx >= 1 && wdIdx <= 5) cur.days[wdIdx - 1].push(sess);   // วันเดียวกันหลายชั่วโมง -> ต่อกันในวันนั้น
-    else cur.extras.push(sess);                                      // ส/อา หรือไม่ทราบวัน -> ต่อท้ายสัปดาห์
-  });
-  weeks.forEach(function(w){
-    var cols = [];
-    w.days.forEach(function(list){
-      if (list.length) cols = cols.concat(list); else cols.push(null);
-    });
-    cols = cols.concat(w.extras);
-    while (cols.length < ATT_SLOTS_PER_WEEK) cols.push(null);
-    w.cols = cols;
-    var ms = [];
-    w.cols.forEach(function(x){
-      if (x && x.month && ms.indexOf(x.month) < 0) ms.push(x.month);
-    });
-    w.monthHtml = ms.map(function(m){ return esc(m); }).join("/<wbr>");   // ชื่อเดือนเต็ม
-  });
-  return weeks;
-}
-function attBlankWeek(){
-  var cols = [];
-  for (var i = 0; i < ATT_SLOTS_PER_WEEK; i++) cols.push(ATT_BLANK);
-  return { days: [], extras: [], cols: cols, monthHtml: "", blank: true };
-}
-function attPageCount(subj){
-  var yr = (DB && DB.schoolInfo) ? DB.schoolInfo.academicYear : "";
-  return Math.max(1, Math.ceil(attBuildWeeks(subj.sessions, yr).length / ATT_WEEKS_PER_PAGE));
-}
 function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
   var sessions = s.sessions;
-  var weeks = attBuildWeeks(sessions, info.academicYear);
-  var pageWeeks = [];
-  for (var i = 0; i < weeks.length; i += ATT_WEEKS_PER_PAGE) pageWeeks.push(weeks.slice(i, i + ATT_WEEKS_PER_PAGE));
-  if (!pageWeeks.length) pageWeeks = [[]];
-  /* หน้าสุดท้ายต้องมีอย่างน้อย 4 สัปดาห์: ถ้าไม่ถึง เติมสัปดาห์ว่าง (สีเทา) ให้ครบ */
-  var lastWeeks = pageWeeks[pageWeeks.length - 1];
-  while (lastWeeks.length < ATT_MIN_WEEKS_LAST_PAGE) lastWeeks.push(attBlankWeek());
+  var CHUNK_SIZE = ATTENDANCE_CHUNK_SIZE;
+  var chunks = [];
+  for (var i=0;i<sessions.length;i+=CHUNK_SIZE) chunks.push(sessions.slice(i, i+CHUNK_SIZE));
+  if (!chunks.length) chunks = [[]];
 
-  /* เลข "ชั่วโมงที่" สะสมทั้งวิชา (ไม่นับวันหยุด) startHour = ชั่วโมงที่นับมาแล้วก่อนหน้า (ใช้ตอนพิมพ์รวมปี) */
+  /* คำนวณ "ชั่วโมงที่เท่าไหร่" สะสมของแต่ละวันเรียน (ไม่นับวันหยุด) ล่วงหน้าครั้งเดียวสำหรับทั้งวิชา
+     เพื่อให้เลขชั่วโมงต่อเนื่องกันถูกต้องแม้ตารางจะถูกแบ่งหน้า (chunk) เวลาพิมพ์
+     startHour: เลขชั่วโมงเริ่มต้น (ใช้ตอนพิมพ์รวมปีการศึกษา เพื่อให้เทอม 2 นับต่อจากเทอม 1 แทนที่จะเริ่มใหม่ที่ 1) */
   var hourCounter = Number(startHour) || 0;
-  var hourNumById = {};
+  var hourLabelById = {};
   sessions.forEach(function(sess){
     if (sess.holiday) return;
     var h = Number(sess.hours) || 0;
-    if (h <= 0){ hourNumById[sess.id] = ""; return; }
-    var a = hourCounter + 1, b = hourCounter + h;
-    hourNumById[sess.id] = h > 1 ? (a + "-" + b) : String(a);
-    hourCounter = b;
+    if (h <= 0){ hourLabelById[sess.id] = ""; return; }
+    var startHour = hourCounter + 1;
+    var endHour = hourCounter + h;
+    hourLabelById[sess.id] = "ชม." + (h > 1 ? (startHour + "-" + endHour) : String(startHour));
+    hourCounter = endHour;
   });
 
-  var CELL = 'border:1px solid #333; padding:1.5px 1px;';
-  var FILLER_BG = "#EFEFEF";    // พื้นเทา (สัปดาห์ว่าง / ช่องเติมท้ายหน้า)
-  var TH = 'border:1.5px solid #000; padding:1px; font-weight:700; font-size:11px; line-height:1.25;';   // หัวตาราง: ไม่มีสีพื้น เน้นเส้นหนา
-  var TH_END = ' border-bottom:3px solid #000;';   // เส้นหนาใต้หัวตาราง
-  var GRAY_TD = '<td style="' + CELL + ' background:' + FILLER_BG + ';"></td>';
+  var pages = chunks.map(function(chunkSessions, chunkIndex){
+    var isLastChunk = (chunkIndex === chunks.length - 1);
 
-  var pages = pageWeeks.map(function(wks, chunkIndex){
-    var isLastChunk = (chunkIndex === pageWeeks.length - 1);
-    var cols = [];
-    wks.forEach(function(w){ cols = cols.concat(w.cols); });
-    var fillerColCount = isLastChunk ? 0 : Math.max(0, ATT_WEEKS_PER_PAGE * ATT_SLOTS_PER_WEEK - cols.length);  // หน้าสุดท้ายเต็ม 4 สัปดาห์พอ ไม่ต่อช่องเทาเพิ่ม
-    var fillerHeader = "", fillerBody = "";
-    for (var f = 0; f < fillerColCount; f++){
-      fillerHeader += '<th rowspan="4" style="' + TH + ' background:' + FILLER_BG + ';' + TH_END + '"></th>';
-      fillerBody += '<td style="' + CELL + ' background:' + FILLER_BG + ';"></td>';
+    /* ถ้าหน้านี้ (โดยเฉพาะหน้าสุดท้าย) มีจำนวนคอลัมน์วัน + คอลัมน์สรุป รวมกันไม่ครบ 13 คอลัมน์
+       ให้เติมคอลัมน์ว่างสีเทาทึบ แทรกต่อจากคอลัมน์วันจริง เพื่อให้ความกว้างตารางเท่ากันทุกหน้า */
+    var FILLER_BG = "#EFEFEF";
+    var summaryColCount = isLastChunk ? 6 : 0;
+    var fillerColCount = Math.max(0, CHUNK_SIZE - chunkSessions.length - summaryColCount);
+    var fillerHeaderCells = "";
+    for (var fh = 0; fh < fillerColCount; fh++){
+      fillerHeaderCells += '<th style="border:1px solid #333; padding:1.5px 2px; background:' + FILLER_BG + ';"></th>';
     }
+    var fillerBodyCell = '<td style="border:1px solid #333; padding:1.5px 2px; background:' + FILLER_BG + ';"></td>';
+    var fillerBodyCells = "";
+    for (var fb = 0; fb < fillerColCount; fb++) fillerBodyCells += fillerBodyCell;
 
-    var rowWeek = wks.map(function(w, wi){
-      var label = 'สัปดาห์ที่ ' + (chunkIndex * ATT_WEEKS_PER_PAGE + wi + 1);
-      if (w.blank) return '<th colspan="' + w.cols.length + '" style="' + TH + ' background:' + FILLER_BG + '; color:#777; font-size:12px;">' + label + '</th>';
-      return '<th colspan="' + w.cols.length + '" style="' + TH + ' font-size:12px;">' + label + '</th>';
-    }).join("");
-    var rowMonth = wks.map(function(w){
-      if (w.blank) return '<th colspan="' + w.cols.length + '" style="' + TH + ' background:' + FILLER_BG + ';"></th>';
-      return '<th colspan="' + w.cols.length + '" style="' + TH + '">' + w.monthHtml + '</th>';
-    }).join("");
-    var rowDate = cols.map(function(sess){
-      if (sess === ATT_BLANK) return '<th style="' + TH + ' background:' + FILLER_BG + ';"></th>';
-      if (!sess) return '<th style="' + TH + '"></th>';
-      return '<th style="' + TH + (sess.holiday ? ' background:var(--holiday-bg);' : '') + '">' + esc(sess.day || "-") + '</th>';
-    }).join("");
-    var rowHour = cols.map(function(sess){
-      if (sess === ATT_BLANK) return '<th style="' + TH + ' background:' + FILLER_BG + ';' + TH_END + ' height:30px; padding:1px 0;"></th>';
-      var t = (sess && !sess.holiday) ? (hourNumById[sess.id] || "") : "";
-      return '<th style="' + TH + (sess && sess.holiday ? ' background:var(--holiday-bg);' : '') + TH_END + ' height:30px; padding:1px 0;">' +
-        '<span style="writing-mode:vertical-rl; transform:rotate(180deg); display:inline-block; font-size:10px; font-weight:700;">' + esc(t) + '</span></th>';
-    }).join("");
+    var headerCols = chunkSessions.map(function(sess){
+      if (sess.holiday){
+        return '<th style="border:1px solid #333; padding:1.5px 2px; font-weight:600; font-size:7.5px; line-height:1.2; background:var(--holiday-bg); white-space:normal;">' + esc(monthShort(sess.month)) + '<br/>' + esc(sess.day||"-") + '</th>';
+      }
+      var wdIndex = THAI_WEEKDAYS_FULL.indexOf(sess.weekday);
+      var wd;
+      if (wdIndex >= 0){
+        wd = THAI_WEEKDAYS_SHORT[wdIndex];
+      } else {
+        var d = sessionDate(sess, info.academicYear);
+        wd = d ? THAI_WEEKDAYS_SHORT[d.getDay()] : "";
+      }
+      return '<th style="border:1px solid #333; padding:1.5px 2px; font-weight:600; font-size:7.5px; line-height:1.2;">' +
+        esc(monthShort(sess.month)) + '<br/>' +
+        (wd ? (wd + ' ') : '') + esc(sess.day || "-") + '<br/>' +
+        esc(hourLabelById[sess.id] || "") +
+      '</th>';
+    }).join("") + fillerHeaderCells;
 
+    /* จำนวนแถวข้อมูลทั้งหมดในตารางหน้านี้ (นักเรียนจริง + แถวเปล่าเติมเต็ม) ใช้กำหนด rowspan ของช่องวันหยุดพิเศษ */
     var PAD_ROWS = 45;
     var totalBodyRows = Math.max(comp.rows.length, PAD_ROWS);
     var rowCounter = 0;
+
+    /* ช่องวันหยุดพิเศษ: แสดงหมายเหตุ (เหตุผลที่หยุด) เป็นข้อความแนวตั้งในตัวตาราง โดย merge (rowspan) ตลอดทั้งคอลัมน์ ครั้งเดียวที่แถวแรกของหน้า */
     function holidaySessionCell(sess){
       if (rowCounter !== 0) return "";
       var noteText = esc(sess.note) || "หยุด";
-      return '<td rowspan="' + totalBodyRows + '" style="' + CELL + ' background:var(--holiday-bg); text-align:center; vertical-align:middle;">' +
-        '<div style="writing-mode:vertical-rl; text-orientation:mixed; font-size:12px; line-height:1.3; display:inline-block; white-space:normal;">' + noteText + '</div></td>';
+      return '<td rowspan="' + totalBodyRows + '" style="border:1px solid #333; padding:2px 1px; background:var(--holiday-bg); text-align:center; vertical-align:middle;">' +
+        '<div style="writing-mode:vertical-rl; text-orientation:mixed; font-size:12px; line-height:1.3; display:inline-block; white-space:normal;">' + noteText + '</div>' +
+      '</td>';
     }
 
     var bodyRows = comp.rows.map(function(r){
@@ -6635,19 +6627,17 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
       var transferSessionId = (stu && stu.transferSessionId) || "";
       var transferIndex = transferSessionId ? sessions.findIndex(function(x){ return x.id === transferSessionId; }) : -1;
       var att = s.attendance[r.id] || {};
-      var cells = cols.map(function(sess){
-        if (sess === ATT_BLANK) return GRAY_TD;
-        if (!sess) return '<td style="' + CELL + '"></td>';
+      var cells = chunkSessions.map(function(sess){
         if (sess.holiday) return holidaySessionCell(sess);
         var globalIdx = sessions.indexOf(sess);
-        if (transferIndex !== -1 && globalIdx > transferIndex) return '<td style="' + CELL + ' background:#F4F4F4;"></td>';
+        if (transferIndex !== -1 && globalIdx > transferIndex) return '<td style="border:1px solid #333; padding:1.5px 2px; background:#F4F4F4;"></td>';
         var st = att[sess.id];
         var label = st === "absent" ? "ข" : st === "late" ? "ส" : st === "leave" ? "ล" : st === "sick" ? "ป" : "/";
         var isMark = (st === "absent" || st === "late" || st === "leave" || st === "sick");
         var labelHtml = isMark
           ? '<span style="display:inline-block; color:#B3432E; border-top:1.2px solid #B3432E; border-bottom:1.2px solid #B3432E; border-radius:50%; padding:0 1px; line-height:1.15;">' + label + '</span>'
           : label;
-        return '<td style="' + CELL + ' text-align:center;">' + labelHtml + '</td>';
+        return '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + labelHtml + '</td>';
       }).join("");
 
       var summaryCells = "";
@@ -6663,61 +6653,65 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
         });
         var statusLabel = r.resultStatus ? esc(r.resultStatus) : "ปกติ";
         summaryCells =
-          '<td style="' + CELL + ' text-align:center;">' + (absentCount || "-") + '</td>' +
-          '<td style="' + CELL + ' text-align:center;">' + (leaveCount || "-") + '</td>' +
-          '<td style="' + CELL + ' text-align:center;">' + (sickCount || "-") + '</td>' +
-          '<td style="' + CELL + ' text-align:center; font-weight:700;">' + (r.hoursEarned !== null ? r.hoursEarned : "-") + '</td>' +
-          '<td style="' + CELL + ' text-align:center;">' + (r.attPercent !== null ? r.attPercent : "-") + '</td>' +
-          '<td style="' + CELL + ' text-align:center;">' + statusLabel + '</td>';
+          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (absentCount || "-") + '</td>' +
+          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (leaveCount || "-") + '</td>' +
+          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (sickCount || "-") + '</td>' +
+          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center; font-weight:700;">' + (r.hoursEarned!==null?r.hoursEarned:"-") + '</td>' +
+          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (r.attPercent!==null?r.attPercent:"-") + '</td>' +
+          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + statusLabel + '</td>';
       }
+
       var rowHtml = '<tr>' +
-        '<td style="' + CELL + ' text-align:center; font-size:14px;">' + r.no + '</td>' +
-        '<td style="' + CELL + ' padding:1.5px 4px; white-space:nowrap; font-size:14px;">' + esc(r.name) + '</td>' +
-        cells + fillerBody + summaryCells + '</tr>';
+        '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center; font-size:14px;">' + r.no + '</td>' +
+        '<td style="border:1px solid #333; padding:1.5px 4px; white-space:nowrap; font-size:14px;">' + esc(r.name) + '</td>' +
+        cells + fillerBodyCells + summaryCells +
+      '</tr>';
       rowCounter++;
       return rowHtml;
     }).join("");
 
     for (var rIdx = comp.rows.length; rIdx < PAD_ROWS; rIdx++){
-      var padCells = cols.map(function(sess){
-        if (sess === ATT_BLANK) return GRAY_TD;
-        if (sess && sess.holiday) return holidaySessionCell(sess);
-        return '<td style="' + CELL + '"></td>';
+      var padCells = chunkSessions.map(function(sess){
+        if (sess.holiday) return holidaySessionCell(sess);
+        return '<td style="border:1px solid #333; padding:1.5px 2px;"></td>';
       }).join("");
-      var padSummary = isLastChunk ? Array(6).fill('<td style="' + CELL + '"></td>').join('') : "";
+      var padSummaryCells = isLastChunk ? Array(6).fill('<td style="border:1px solid #333; padding:1.5px 2px;"></td>').join('') : "";
       bodyRows += '<tr>' +
-        '<td style="' + CELL + ' text-align:center; font-size:14px;">' + (rIdx + 1) + '</td>' +
-        '<td style="' + CELL + ' padding:1.5px 4px;">&nbsp;</td>' +
-        padCells + fillerBody + padSummary + '</tr>';
+        '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center; font-size:14px;">' + (rIdx+1) + '</td>' +
+        '<td style="border:1px solid #333; padding:1.5px 4px;">&nbsp;</td>' +
+        padCells + fillerBodyCells + padSummaryCells +
+      '</tr>';
       rowCounter++;
     }
 
     var summaryHeaders = isLastChunk ?
-      '<th rowspan="4" style="' + TH + TH_END + ' width:24px;">ขาด</th>' +
-      '<th rowspan="4" style="' + TH + TH_END + ' width:24px;">ลา</th>' +
-      '<th rowspan="4" style="' + TH + TH_END + ' width:24px;">ป่วย</th>' +
-      '<th rowspan="4" style="' + TH + TH_END + ' width:36px;">รวม<br/>(ชม.)</th>' +
-      '<th rowspan="4" style="' + TH + TH_END + ' width:34px;">ร้อยละ</th>' +
-      '<th rowspan="4" style="' + TH + TH_END + ' width:38px;">สถานะ</th>'
+      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:26px;">ขาด</th>' +
+      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:26px;">ลา</th>' +
+      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:26px;">ป่วย</th>' +
+      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:40px;">รวม<br/>(ชม.)</th>' +
+      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:36px;">ร้อยละ</th>' +
+      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:40px;">สถานะ</th>'
       : "";
 
     var pageNum = startPageNum + chunkIndex;
+    var pageBreakClass = " page-break";
+    var noteHtml = '';
+
     return '' +
-    '<div class="print-area attendance-page page-break" data-section="attendance" style="padding:14px 24px; color:#111; position:relative; -webkit-print-color-adjust:exact; print-color-adjust:exact;">' +
+    '<div class="print-area attendance-page' + pageBreakClass + '" data-section="attendance" style="padding:14px 24px; color:#111; position:relative;">' +
       '<div style="position:absolute; top:14px; right:20px; font-size:11px;">หน้า ' + pageNum + '</div>' +
       '<div style="text-align:center; font-size:18px; font-weight:700; margin-bottom:2px; margin-top:40px;">บันทึกเวลาเรียน รายวิชา' + esc(s.subject) + ' รหัสวิชา ' + esc(s.subjectCode) + '</div>' +
       '<div style="text-align:center; font-size:16px; margin-bottom:8px;">' + esc(info.schoolName || "") + (info.affiliation ? (' สังกัด' + esc(info.affiliation)) : "") + ' &nbsp; ปีการศึกษา ' + esc(info.academicYear) + '</div>' +
       '<table style="width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed; flex:1 1 auto;">' +
-        '<thead>' +
-          '<tr><th rowspan="4" style="' + TH + TH_END + ' width:28px;">เลขที่</th>' +
-              '<th rowspan="4" style="' + TH + TH_END + ' width:150px; font-size:13px;">ชื่อ - นามสกุล</th>' +
-              rowWeek + fillerHeader + summaryHeaders + '</tr>' +
-          '<tr>' + rowMonth + '</tr>' +
-          '<tr>' + rowDate + '</tr>' +
-          '<tr>' + rowHour + '</tr>' +
-        '</thead>' +
+        '<thead><tr>' +
+          '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:28px;">เลขที่</th>' +
+          '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:160px;">ชื่อ - นามสกุล</th>' +
+          headerCols +
+          summaryHeaders +
+        '</tr></thead>' +
         '<tbody>' + bodyRows + '</tbody>' +
       '</table>' +
+      noteHtml +
     '</div>';
   }).join("");
 
@@ -6750,6 +6744,32 @@ function renderApp(){
 /* ================= boot ================= */
 rerender();
 setTimeout(function(){ var n=document.getElementById("saveNote"); if(n) n.textContent="พร้อมใช้งาน (ยังไม่มีการเปลี่ยนแปลงใหม่)"; }, 50);
+
+/* ---- แถบเมนูสีน้ำเงินบนจอคอม: ย่อเนื้อหาอัตโนมัติให้พอดีความสูงจอ (ไม่ต้องเลื่อน) ----
+   จอสูงพอ = ขนาดปกติ · จอเตี้ย = ย่อลงตามสัดส่วน (ต่ำสุด 55%) · โทรศัพท์/จอเล็ก (<=880px) ไม่ใช้ส่วนนี้ */
+function fitSidebar(){
+  var sb = document.getElementById("sidebarEl");
+  if (!sb) return;
+  if (window.innerWidth <= 880){ sb.style.removeProperty("--sbz"); return; }
+  var z = 1;
+  sb.style.setProperty("--sbz", "1");
+  var avail = sb.clientHeight;
+  if (sb.scrollHeight <= avail + 1) return;
+  z = Math.max(0.55, (avail - 36) / (sb.scrollHeight - 36));
+  for (var k = 0; k < 8; k++){
+    sb.style.setProperty("--sbz", String(z));
+    if (sb.scrollHeight <= avail + 1 || z <= 0.55) break;
+    z = Math.max(0.55, z - 0.03);
+  }
+}
+(function(){
+  var prevRerender = rerender;
+  rerender = function(){ var r = prevRerender.apply(this, arguments); fitSidebar(); return r; };
+  window.addEventListener("resize", fitSidebar);
+  window.addEventListener("load", fitSidebar);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitSidebar);
+  fitSidebar();
+})();
 </script>
 
 
