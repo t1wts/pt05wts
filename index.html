@@ -5216,15 +5216,15 @@ function renderScores(s, comp){
     var tint = it.type === "collect" ? "var(--collect-tint)" : "var(--exam-tint)";
     var val = s.scores[r.id].items[it.id] !== undefined ? s.scores[r.id].items[it.id] : "";
     var isOver = val !== "" && !isNaN(Number(val)) && Number(val) > Number(it.max);
-    /* คะแนนไม่เกินครึ่งของคะแนนเต็ม — แจ้งเตือนให้ครูเห็นเฉยๆ ไม่ส่งผลต่อการคำนวณหรือการกรอกใดๆ */
-    var isLow = !isOver && val !== "" && !isNaN(Number(val)) && Number(it.max) > 0 && Number(val) <= Number(it.max)/2;
+    /* คะแนนต่ำกว่าครึ่งของคะแนนเต็ม — แจ้งเตือนให้ครูเห็นเฉยๆ ไม่ส่งผลต่อการคำนวณหรือการกรอกใดๆ */
+    var isLow = !isOver && val !== "" && !isNaN(Number(val)) && Number(it.max) > 0 && Number(val) < Number(it.max)/2; /* ต่ำกว่า 50% เท่านั้น (50% พอดีไม่เตือน) */
     var borderStyle = isOver ? "border:2px solid var(--red); background:#FCE4E4;"
       : isLow ? "border:2px solid var(--amber); background:#FCF3DC;"
       : "border:1px solid var(--line);";
     var disAttr = blocked ? ' disabled title="นักเรียนสถานะ ย้าย/มส ไม่สามารถกรอกคะแนนได้"' : '';
     var bg = blocked ? '#EEE' : 'white';
     return '<td style="text-align:center; padding:3px 4px; background:'+tint+';">' +
-      '<input id="f_score_'+r.id+'_'+it.id+'" data-srow="'+rowIndex+'" data-scol="'+colIndex+'" data-studentid="'+r.id+'" data-itemid="'+it.id+'" type="text" inputmode="decimal" value="'+esc(blocked?"":val)+'" placeholder="0"'+disAttr+' title="เต็ม '+it.max+(isOver?" — เกินคะแนนเต็ม!":(isLow?" — คะแนนไม่เกินครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+borderStyle+' background:'+bg+'; border-radius:4px; text-align:center;" oninput="updateItemScore(\''+r.id+'\',\''+it.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
+      '<input id="f_score_'+r.id+'_'+it.id+'" data-srow="'+rowIndex+'" data-scol="'+colIndex+'" data-studentid="'+r.id+'" data-itemid="'+it.id+'" type="text" inputmode="decimal" value="'+esc(blocked?"":val)+'" placeholder="0"'+disAttr+' title="เต็ม '+it.max+(isOver?" — เกินคะแนนเต็ม!":(isLow?" — คะแนนต่ำกว่าครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+borderStyle+' background:'+bg+'; border-radius:4px; text-align:center;" oninput="updateItemScore(\''+r.id+'\',\''+it.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
       (isOver ? '<div style="font-size:10px; color:var(--red); font-weight:700;">เกินเต็ม!</div>' : '') +
       (isLow ? '<div style="font-size:10px; color:var(--amber); font-weight:700;">คะแนนต่ำ⚠</div>' : '') +
     '</td>';
@@ -5239,14 +5239,14 @@ function renderScores(s, comp){
     var cells = orderedItems.map(function(it, colIndex){ return scoreInput(r, it, rowIndex, colIndex, blocked); }).join("");
     var makeupVal = s.scores[r.id].makeup !== undefined ? s.scores[r.id].makeup : "";
     var makeupOver = makeupVal !== "" && !isNaN(Number(makeupVal)) && Number(makeupVal) > finalMaxTotal;
-    var makeupLow = !makeupOver && makeupVal !== "" && !isNaN(Number(makeupVal)) && finalMaxTotal > 0 && Number(makeupVal) <= finalMaxTotal/2;
+    var makeupLow = !makeupOver && makeupVal !== "" && !isNaN(Number(makeupVal)) && finalMaxTotal > 0 && Number(makeupVal) < finalMaxTotal/2;
     var makeupBorder = makeupOver ? "border:2px solid var(--red); background:#FCE4E4;" : (makeupLow ? "border:2px solid var(--amber); background:#FCF3DC;" : "border:1px solid var(--line);");
     var makeupDisAttr = blocked ? ' disabled title="นักเรียนสถานะ ย้าย/มส ไม่สามารถกรอกคะแนนได้"' : '';
     var makeupBg = blocked ? '#EEE' : 'white';
     var midtermMaxTotal = midtermItems.reduce(function(sum,it){ return sum + (Number(it.max)||0); }, 0);
     var makeupMidVal = s.scores[r.id].makeupMid !== undefined ? s.scores[r.id].makeupMid : "";
     var makeupMidOver = makeupMidVal !== "" && !isNaN(Number(makeupMidVal)) && Number(makeupMidVal) > midtermMaxTotal;
-    var makeupMidLow = !makeupMidOver && makeupMidVal !== "" && !isNaN(Number(makeupMidVal)) && midtermMaxTotal > 0 && Number(makeupMidVal) <= midtermMaxTotal/2;
+    var makeupMidLow = !makeupMidOver && makeupMidVal !== "" && !isNaN(Number(makeupMidVal)) && midtermMaxTotal > 0 && Number(makeupMidVal) < midtermMaxTotal/2;
     var makeupMidBorder = makeupMidOver ? "border:2px solid var(--red); background:#FCE4E4;" : (makeupMidLow ? "border:2px solid var(--amber); background:#FCF3DC;" : "border:1px solid var(--line);");
     var makeupMidDisAttr = blocked ? ' disabled title="นักเรียนสถานะ ย้าย/มส ไม่สามารถกรอกคะแนนได้"' : '';
     var makeupMidBg = blocked ? '#EEE' : 'white';
@@ -5256,14 +5256,14 @@ function renderScores(s, comp){
       '<td style="text-align:center; font-weight:600;">'+(r.collectSum !== null ? r.collectSum : "-")+'</td>' +
       '<td style="text-align:center;">'+(r.midtermSum !== null ? r.midtermSum : "-")+'</td>' +
       '<td style="text-align:center; padding:3px 4px; background:#FFF6F4;">' +
-        '<input id="f_makeupMid_'+r.id+'" data-srow="'+rowIndex+'" data-scol="'+makeupMidColIndex+'" data-studentid="'+r.id+'" data-itemid="__makeupMid__" type="text" inputmode="decimal" value="'+esc(blocked?"":makeupMidVal)+'" placeholder="-"'+makeupMidDisAttr+' title="คะแนนสอบแก้ตัว เต็ม '+midtermMaxTotal+(makeupMidOver?" — เกินคะแนนเต็ม!":(makeupMidLow?" — คะแนนไม่เกินครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+makeupMidBorder+' background:'+makeupMidBg+'; border-radius:4px; text-align:center;" oninput="updateMakeupMidScore(\''+r.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
+        '<input id="f_makeupMid_'+r.id+'" data-srow="'+rowIndex+'" data-scol="'+makeupMidColIndex+'" data-studentid="'+r.id+'" data-itemid="__makeupMid__" type="text" inputmode="decimal" value="'+esc(blocked?"":makeupMidVal)+'" placeholder="-"'+makeupMidDisAttr+' title="คะแนนสอบแก้ตัว เต็ม '+midtermMaxTotal+(makeupMidOver?" — เกินคะแนนเต็ม!":(makeupMidLow?" — คะแนนต่ำกว่าครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+makeupMidBorder+' background:'+makeupMidBg+'; border-radius:4px; text-align:center;" oninput="updateMakeupMidScore(\''+r.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
         (makeupMidOver ? '<div style="font-size:10px; color:var(--red); font-weight:700;">เกินเต็ม!</div>' : '') +
         (makeupMidLow ? '<div style="font-size:10px; color:var(--amber); font-weight:700;">คะแนนต่ำ⚠</div>' : '') +
       '</td>' +
       '<td style="text-align:center; font-weight:600;">'+(r.interimSum !== null ? r.interimSum : "-")+'</td>' +
       '<td style="text-align:center;">'+(r.finalSum !== null ? r.finalSum : "-")+'</td>' +
       '<td style="text-align:center; padding:3px 4px; background:#FFF6F4;">' +
-        '<input id="f_makeup_'+r.id+'" data-srow="'+rowIndex+'" data-scol="'+makeupColIndex+'" data-studentid="'+r.id+'" data-itemid="__makeup__" type="text" inputmode="decimal" value="'+esc(blocked?"":makeupVal)+'" placeholder="-"'+makeupDisAttr+' title="คะแนนสอบแก้ตัว เต็ม '+finalMaxTotal+(makeupOver?" — เกินคะแนนเต็ม!":(makeupLow?" — คะแนนไม่เกินครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+makeupBorder+' background:'+makeupBg+'; border-radius:4px; text-align:center;" oninput="updateMakeupScore(\''+r.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
+        '<input id="f_makeup_'+r.id+'" data-srow="'+rowIndex+'" data-scol="'+makeupColIndex+'" data-studentid="'+r.id+'" data-itemid="__makeup__" type="text" inputmode="decimal" value="'+esc(blocked?"":makeupVal)+'" placeholder="-"'+makeupDisAttr+' title="คะแนนสอบแก้ตัว เต็ม '+finalMaxTotal+(makeupOver?" — เกินคะแนนเต็ม!":(makeupLow?" — คะแนนต่ำกว่าครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+makeupBorder+' background:'+makeupBg+'; border-radius:4px; text-align:center;" oninput="updateMakeupScore(\''+r.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
         (makeupOver ? '<div style="font-size:10px; color:var(--red); font-weight:700;">เกินเต็ม!</div>' : '') +
         (makeupLow ? '<div style="font-size:10px; color:var(--amber); font-weight:700;">คะแนนต่ำ⚠</div>' : '') +
       '</td>' +
@@ -5281,7 +5281,7 @@ function renderScores(s, comp){
   var scoreTableWidth = 900 + s.structure.length*100;
   return '' +
   '<div class="section-title">กรอกคะแนน</div>' +
-  '<div class="section-sub">คอลัมน์ในตารางนี้สร้างจากหน้า "โครงสร้างรายวิชา" โดยอัตโนมัติ แบ่งเป็นกลุ่ม "ก่อนกลางภาค" / "หลังกลางภาค" / "สอบกลางภาค" / "สอบปลายภาค" · ช่องกรอกคะแนนจะขึ้นกรอบแดง "เกินเต็ม!" ทันทีถ้ากรอกเกินคะแนนเต็มของรายการนั้น หรือขึ้นกรอบสีเหลือง "คะแนนต่ำ⚠" ถ้ากรอกคะแนนไม่เกินครึ่งของคะแนนเต็ม (แจ้งเตือนเฉยๆ ไม่มีผลต่อการคำนวณ) · "ช่องแก้ไข" ใช้สำหรับนักเรียนที่มาสอบแก้ตัว ถ้ากรอกคะแนนในช่องนี้ ระบบจะใช้แทนคะแนนสอบกลางภาค/ปลายภาค (ตามช่อง) ในการคำนวณคะแนนรวมทั้งหมด · คอลัมน์ "สถานะ" ใช้กำหนดผล ร/มส/ย้าย ด้วยตนเอง · นักเรียนที่เวลาเรียนไม่ถึง 80% จะได้ มส อัตโนมัติ (ถ้ายังไม่ได้กำหนดสถานะอื่นไว้) · นักเรียนที่เป็น มส หรือ ย้าย จะไม่มีข้อมูลเวลาเรียน/คะแนนในหน้าสรุป และนักเรียนที่ย้ายจะไม่ถูกนับรวมในสถิติหน้าปก · ช่องกรอกคะแนนทุกช่อง (ตัวชี้วัด/สอบ/ช่องแก้ไข/คุณลักษณะ/อ่านเขียน) ของนักเรียนสถานะ ย้าย/มส จะถูกล็อกให้กรอกไม่ได้โดยอัตโนมัติ · เลื่อนตารางด้านล่างไปทางขวาได้ทั้งจากแถบเลื่อนด้านบนหรือด้านล่างตาราง</div>' +
+  '<div class="section-sub">คอลัมน์ในตารางนี้สร้างจากหน้า "โครงสร้างรายวิชา" โดยอัตโนมัติ แบ่งเป็นกลุ่ม "ก่อนกลางภาค" / "หลังกลางภาค" / "สอบกลางภาค" / "สอบปลายภาค" · ช่องกรอกคะแนนจะขึ้นกรอบแดง "เกินเต็ม!" ทันทีถ้ากรอกเกินคะแนนเต็มของรายการนั้น หรือขึ้นกรอบสีเหลือง "คะแนนต่ำ⚠" ถ้ากรอกคะแนนต่ำกว่าครึ่งของคะแนนเต็ม (แจ้งเตือนเฉยๆ ไม่มีผลต่อการคำนวณ) · "ช่องแก้ไข" ใช้สำหรับนักเรียนที่มาสอบแก้ตัว ถ้ากรอกคะแนนในช่องนี้ ระบบจะใช้แทนคะแนนสอบกลางภาค/ปลายภาค (ตามช่อง) ในการคำนวณคะแนนรวมทั้งหมด · คอลัมน์ "สถานะ" ใช้กำหนดผล ร/มส/ย้าย ด้วยตนเอง · นักเรียนที่เวลาเรียนไม่ถึง 80% จะได้ มส อัตโนมัติ (ถ้ายังไม่ได้กำหนดสถานะอื่นไว้) · นักเรียนที่เป็น มส หรือ ย้าย จะไม่มีข้อมูลเวลาเรียน/คะแนนในหน้าสรุป และนักเรียนที่ย้ายจะไม่ถูกนับรวมในสถิติหน้าปก · ช่องกรอกคะแนนทุกช่อง (ตัวชี้วัด/สอบ/ช่องแก้ไข/คุณลักษณะ/อ่านเขียน) ของนักเรียนสถานะ ย้าย/มส จะถูกล็อกให้กรอกไม่ได้โดยอัตโนมัติ · เลื่อนตารางด้านล่างไปทางขวาได้ทั้งจากแถบเลื่อนด้านบนหรือด้านล่างตาราง</div>' +
   '<div id="scoreScrollTop" class="table-scroll" style="height:16px; overflow-y:hidden;" onscroll="syncScrollLeft(\'scoreScrollTop\',\'scoreScrollBottom\')"><div style="width:'+scoreTableWidth+'px; height:1px;"></div></div>' +
   '<div id="scoreScrollBottom" class="table-scroll drag-scroll" tabindex="0" title="ลากเมาส์ค้าง หรือโฟกัสแล้วกดลูกศรซ้าย-ขวา เพื่อเลื่อนดูรายการคะแนนถัดไป" onmousedown="startDragScroll(event,\'scoreScrollBottom\',\'scoreScrollTop\')" onkeydown="handleScrollAreaKeydown(event,\'scoreScrollBottom\',\'scoreScrollTop\')" onscroll="syncScrollLeft(\'scoreScrollBottom\',\'scoreScrollTop\')"><table class="ptable" style="min-width:'+scoreTableWidth+'px;"><thead>' +
     '<tr>'+groupRow+'</tr><tr>'+itemRow+'</tr>' +
