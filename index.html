@@ -366,8 +366,8 @@ var DEFAULT_STRUCTURE = [
   {id:"it1", name:"", indicatorNo:"1", type:"collect", max:20},
   {id:"it2", name:"", indicatorNo:"2", type:"collect", max:20},
   {id:"it3", name:"", indicatorNo:"3", type:"collect", max:20},
-  {id:"it4", name:"สอบกลางภาค", type:"exam", max:20},
-  {id:"it5", name:"สอบปลายภาค", type:"exam", max:20}
+  {id:"it4", name:"สอบกลางภาค", type:"exam", max:20, period:"midterm"},
+  {id:"it5", name:"สอบปลายภาค", type:"exam", max:20, period:"final"}
 ];
 // สร้างป้ายที่ใช้แสดงของแต่ละรายการในโครงสร้างรายวิชา
 // รายการ "คะแนนเก็บ" (ตัวชี้วัด) จะขึ้นต้นด้วยคำว่า "ตัวชี้วัด" เสมอ ตามด้วยเลขท้ายที่ครูกรอก
@@ -393,6 +393,164 @@ function structureItemLabelInGroup(it, groupItems){
   }
   return it.name || "";
 }
+/* ================= คะแนนสอบกลางภาค/ปลายภาค ผูกกับ "ตัวชี้วัด" =================
+   หน้า "โครงสร้างรายวิชา" ให้ครูกรอกคะแนนสอบ 2 ช่อง (กลางภาค/ปลายภาค) ต่อท้ายตัวชี้วัดแต่ละข้อ
+     - ช่องไหนเว้นว่าง = ตัวชี้วัดนั้นไม่มีสอบในช่วงนั้น
+     - มีตัวเลือกว่า คะแนนสอบ "แยกช่องตามตัวชี้วัด" (examSplit = "each") หรือ "รวมเป็นช่องเดียว" (examSplit = "single")
+   ส่วนอื่นของโปรแกรม (หน้ากรอกคะแนน, สรุปผล, พิมพ์) ยังอ่านรายการสอบจาก s.structure (type:"exam") เหมือนเดิมทุกอย่าง
+   ฟังก์ชันด้านล่างจึง "สร้าง/ปรับรายการสอบใน s.structure ให้อัตโนมัติ" จากตัวเลขที่กรอกในตัวชี้วัด (ติดป้าย auto:true)
+     - โหมดแยกช่อง : 1 ตัวชี้วัดที่มีคะแนนสอบ = 1 รายการสอบ (มีหัว "ตัวชี้วัด n" ในหน้ากรอกคะแนน)
+     - โหมดช่องเดียว: ทุกตัวชี้วัดรวมกันเป็น 1 รายการสอบต่อช่วง คะแนนเต็ม = ผลรวมที่กรอกไว้ในแต่ละตัวชี้วัด */
+var EXAM_PERIODS = [
+  { key:"midterm", field:"midMax", name:"สอบกลางภาค" },
+  { key:"final",   field:"finMax", name:"สอบปลายภาค" }
+];
+function getExamSplit(s){ return s.examSplit === "each" ? "each" : "single"; }
+/* แปลงค่าที่ครูพิมพ์เป็นตัวเลขบวก (ว่าง/ไม่ใช่ตัวเลข/0 = ไม่มีสอบ = คืน 0) */
+function examNumPos(v){
+  if (v === undefined || v === null) return 0;
+  var n = Number(String(v).replace(",", ".").trim());
+  return (isFinite(n) && n > 0) ? n : 0;
+}
+function examRound2(n){ return Math.round(n * 100) / 100; }
+
+/* ข้อมูลเก่า (หรือที่วางจาก Excel) ที่มีรายการสอบแบบอิสระ (ไม่มี auto) ให้ดูดเข้ามาเป็นตัวเลขในตัวชี้วัด
+   - ถ้ารายการสอบมีหลายรายการและเลขตัวชี้วัดตรงกับตัวชี้วัดจริงทุกรายการ -> โหมดแยกช่อง (คะแนนที่กรอกไว้คงเดิม)
+   - นอกนั้น -> โหมดช่องเดียว รวมคะแนนเต็มไว้ที่ตัวชี้วัดข้อแรก และรวมคะแนนที่กรอกไว้ของนักเรียนเป็นช่องเดียว */
+function absorbLegacyExams(s){
+  var collects = s.structure.filter(function(it){ return it.type !== "exam"; });
+  if (!collects.length) return;
+  /* ข้อมูลเก่าบางชุดไม่มีช่วงเวลา (period) ในรายการสอบ -> เดาจากชื่อ ถ้ามีคำว่า "ปลาย" ถือเป็นปลายภาค */
+  s.structure.forEach(function(it){
+    if (it.type === "exam" && !it.auto && !it.period) it.period = /ปลาย/.test(it.name || "") ? "final" : "midterm";
+  });
+  var legacyByPeriod = {}, anyLegacy = false;
+  EXAM_PERIODS.forEach(function(P){
+    legacyByPeriod[P.key] = s.structure.filter(function(it){ return it.type === "exam" && !it.auto && (it.period || "midterm") === P.key; });
+    if (legacyByPeriod[P.key].length) anyLegacy = true;
+  });
+  if (!anyLegacy) return;
+
+  function pairUp(legacy){
+    if (legacy.length < 2) return null;
+    var used = {}, pairs = [];
+    for (var i = 0; i < legacy.length; i++){
+      var e = legacy[i];
+      if (e.indicatorNo === undefined || e.indicatorNo === null || e.indicatorNo === "") return null;
+      var c = collects.find(function(cc){ return String(cc.indicatorNo) === String(e.indicatorNo) && !used[cc.id]; });
+      if (!c) return null;
+      used[c.id] = true; pairs.push([e, c]);
+    }
+    return pairs;
+  }
+  var pairsByPeriod = {}, allPairable = true;
+  EXAM_PERIODS.forEach(function(P){
+    var legacy = legacyByPeriod[P.key];
+    if (!legacy.length) return;
+    pairsByPeriod[P.key] = pairUp(legacy);
+    if (!pairsByPeriod[P.key]) allPairable = false;
+  });
+  var mode = s.examSplit;
+  if (mode !== "each" && mode !== "single") mode = allPairable ? "each" : "single";
+  if (mode === "each" && !allPairable) mode = "single";
+  s.examSplit = mode;
+
+  EXAM_PERIODS.forEach(function(P){
+    var legacy = legacyByPeriod[P.key];
+    if (!legacy.length) return;
+    if (mode === "each" && pairsByPeriod[P.key]){
+      pairsByPeriod[P.key].forEach(function(pr){
+        pr[1][P.field] = pr[0].max;
+        pr[0].auto = true; pr[0].linkId = pr[1].id; pr[0].period = P.key;
+      });
+      return;
+    }
+    /* โหมดช่องเดียว: รวมเป็นรายการแรก */
+    var first = legacy[0];
+    var total = 0;
+    legacy.forEach(function(e){ total += Number(e.max) || 0; });
+    Object.keys(s.scores || {}).forEach(function(sid){
+      var items = s.scores[sid] && s.scores[sid].items;
+      if (!items) return;
+      var sum = 0, hasVal = false;
+      legacy.forEach(function(e){
+        var v = items[e.id];
+        if (v !== "" && v !== undefined && v !== null && !isNaN(Number(v))){ sum += Number(v); hasVal = true; }
+      });
+      items[first.id] = hasVal ? examRound2(sum) : "";
+      legacy.slice(1).forEach(function(e){ delete items[e.id]; });
+    });
+    var dropIds = {};
+    legacy.slice(1).forEach(function(e){ dropIds[e.id] = true; });
+    s.structure = s.structure.filter(function(it){ return !dropIds[it.id]; });
+    first.auto = true; first.linkId = "all"; first.period = P.key;
+    collects[0][P.field] = examRound2(total);
+  });
+}
+
+/* สร้าง/อัปเดต/ลบ รายการสอบอัตโนมัติ ให้ตรงกับตัวเลขที่ครูกรอกในตัวชี้วัด
+   (คะแนนที่นักเรียนกรอกไว้ในรายการสอบเดิมจะไม่ถูกลบ ถ้าสลับโหมดแล้วสลับกลับมาจะเห็นคะแนนเดิมอีกครั้ง) */
+function syncExamItems(s){
+  var mode = getExamSplit(s);
+  var collects = s.structure.filter(function(it){ return it.type !== "exam"; });
+  var autoOld = s.structure.filter(function(it){ return it.type === "exam" && it.auto; });
+  var keepOthers = s.structure.filter(function(it){ return it.type === "exam" && !it.auto; });
+  var newExams = [], added = [];
+  EXAM_PERIODS.forEach(function(P){
+    function upsert(link, max, indicatorNo, desc){
+      var e = autoOld.find(function(x){ return x.linkId === link && x.period === P.key; });
+      if (!e){
+        e = { id:"ex_" + P.key + "_" + link, type:"exam", auto:true, linkId:link, period:P.key };
+        added.push(e);
+      }
+      e.name = P.name; e.max = max; e.indicatorNo = indicatorNo; e.desc = desc || "";
+      newExams.push(e);
+    }
+    if (mode === "each"){
+      collects.forEach(function(c){
+        var v = examNumPos(c[P.field]);
+        if (v > 0) upsert(c.id, examRound2(v), String(c.indicatorNo === undefined || c.indicatorNo === null ? "" : c.indicatorNo), c.name || "");
+      });
+    } else {
+      var total = 0;
+      collects.forEach(function(c){ total += examNumPos(c[P.field]); });
+      total = examRound2(total);
+      if (total > 0) upsert("all", total, "1", "");
+    }
+  });
+  s.structure = collects.concat(newExams, keepOthers);
+  added.forEach(function(e){
+    Object.keys(s.scores || {}).forEach(function(sid){
+      if (!s.scores[sid]) return;
+      if (!s.scores[sid].items) s.scores[sid].items = {};
+      if (s.scores[sid].items[e.id] === undefined) s.scores[sid].items[e.id] = "";
+    });
+  });
+}
+function normalizeExamStructure(s){
+  if (!s || !Array.isArray(s.structure)) return;
+  absorbLegacyExams(s);
+  syncExamItems(s);
+}
+/* ตัวเลือก "แยกช่อง / ช่องเดียว" ในหน้าโครงสร้างรายวิชา */
+function setExamSplit(value){
+  var s = getSubj();
+  if (value !== "each" && value !== "single") return;
+  if (getExamSplit(s) === value) return;
+  var hasExamScores = s.structure.some(function(it){
+    return it.type === "exam" && Object.keys(s.scores || {}).some(function(sid){
+      var v = s.scores[sid] && s.scores[sid].items ? s.scores[sid].items[it.id] : "";
+      return v !== "" && v !== undefined && v !== null;
+    });
+  });
+  if (hasExamScores && !window.confirm("เปลี่ยนรูปแบบช่องคะแนนสอบ?\n\nคะแนนสอบที่กรอกไว้แล้วจะไม่ถูกลบ แต่จะไม่ถูกนำมารวม/แยกให้อัตโนมัติ (ช่องคะแนนสอบจะเป็นช่องใหม่ที่ว่างอยู่ ถ้าเปลี่ยนกลับมา จะเห็นคะแนนเดิมอีกครั้ง)\n\nต้องการเปลี่ยนต่อหรือไม่?")){
+    rerender();
+    return;
+  }
+  s.examSplit = value;
+  scheduleSave(); rerender();
+}
+
 var DEFAULT_DESIRABLE = [
   {id:"des1", name:"รักชาติ ศาสน์ กษัตริย์", max:3},
   {id:"des2", name:"ซื่อสัตย์สุจริต", max:3},
@@ -637,6 +795,8 @@ function updateDocumentTitle(){
 window.addEventListener("beforeprint", function(){ document.title = printDocTitle(); });
 window.addEventListener("afterprint", function(){ updateDocumentTitle(); });
 function rerender(){
+  /* ปรับรายการสอบกลางภาค/ปลายภาคให้ตรงกับตัวเลขที่กรอกในตัวชี้วัดก่อนวาดหน้าจอทุกครั้ง (ดู syncExamItems) */
+  try{ normalizeExamStructure(getSubj()); }catch(e){ console.error("ปรับรายการสอบไม่สำเร็จ", e); }
   var active = document.activeElement;
   var activeId = (active && active.id) ? active.id : null;
   var selStart = null, selEnd = null;
@@ -2689,10 +2849,43 @@ function addMultipleStructureItems(period){
   }
   scheduleSave(); rerender();
 }
+/* เรียงเลขตัวชี้วัดใหม่ 1,2,3,... ตามลำดับแถวหลังแทรก/ลบ
+   ทำเฉพาะเมื่อเลขที่มีอยู่เป็นเลขจำนวนเต็มล้วน (หรือว่าง) — ถ้าครูตั้งเลขเองแบบ 1.1, 2.3, ว1.1 ระบบจะไม่แตะต้อง
+   เพื่อไม่ให้เลขที่ครูตั้งไว้ถูกเขียนทับ (คืนค่า true ถ้าเรียงเลขให้แล้ว) */
+function renumberIndicators(s){
+  var collects = s.structure.filter(function(it){ return it.type !== "exam"; });
+  var plain = collects.every(function(it){
+    var v = String(it.indicatorNo === undefined || it.indicatorNo === null ? "" : it.indicatorNo).trim();
+    return v === "" || /^\d+$/.test(v);
+  });
+  if (!plain) return false;
+  collects.forEach(function(it, i){ it.indicatorNo = String(i + 1); });
+  return true;
+}
+/* แทรกตัวชี้วัดใหม่ "ด้านบน/ด้านล่าง" แถวที่เลือก (เผื่อมีตัวชี้วัดเพิ่มภายหลัง)
+   แถวใหม่ใช้ช่วงเวลาเดียวกับแถวที่เลือก และเลขตัวชี้วัดเรียงใหม่ให้อัตโนมัติ (ดู renumberIndicators)
+   ถ้าครูตั้งเลขเองแบบมีจุด/ตัวอักษร จะเว้นเลขแถวใหม่ไว้ว่างให้กรอกเอง */
+function insertStructureItem(refId, where){
+  var s = getSubj();
+  var idx = s.structure.findIndex(function(x){ return x.id === refId; });
+  if (idx < 0) return;
+  var ref = s.structure[idx];
+  var id = uid("it");
+  var item = { id:id, name:"", indicatorNo:"", type:"collect", max:10, period: ref.period === "after" ? "after" : "before" };
+  s.structure.splice(where === "above" ? idx : idx + 1, 0, item);
+  Object.keys(s.scores).forEach(function(sid){
+    if (!s.scores[sid].items) s.scores[sid].items = {};
+    s.scores[sid].items[id] = "";
+  });
+  renumberIndicators(s);
+  scheduleSave(); rerender();
+  setTimeout(function(){ var el = document.getElementById("f_stno_" + id); if (el) el.focus(); }, 0);
+}
 function removeStructureItem(id){
   var s = getSubj();
   s.structure = s.structure.filter(function(i){ return i.id !== id; });
   Object.keys(s.scores).forEach(function(sid){ delete s.scores[sid].items[id]; });
+  renumberIndicators(s);
   scheduleSave(); rerender();
 }
 function updateStructureItem(id, field, value){
@@ -5209,43 +5402,60 @@ function structureSortedForDisplay(s){
 }
 
 function renderStructure(s, comp){
-  var displayStructure = structureSortedForDisplay(s);
+  /* ตารางนี้แสดงเฉพาะ "ตัวชี้วัด" (คะแนนเก็บ) — คะแนนสอบกลางภาค/ปลายภาคกรอกต่อท้ายตัวชี้วัดแต่ละข้อ
+     ช่องไหนเว้นว่าง = ตัวชี้วัดนั้นไม่มีสอบ รายการสอบจริงถูกสร้างให้อัตโนมัติจาก normalizeExamStructure() */
+  var displayStructure = s.structure.filter(function(it){ return it.type !== "exam"; });
+  var examSplit = getExamSplit(s);
   var rows = displayStructure.map(function(it, i){
-    var tint = it.type === "collect" ? "var(--collect-tint)" : "var(--exam-tint)";
-    var examGroupItems = it.type === "exam" ? s.structure.filter(function(x){
-      return x.type === "exam" && (x.period||"midterm") === (it.period||"midterm");
-    }) : null;
-    var showIndicatorBar = it.type === "collect" || examItemNeedsIndicatorBar(it, examGroupItems);
-    var itemCell = showIndicatorBar ?
-      ('<div style="display:flex; align-items:center; gap:6px;">' +
+    var inpStyle = 'border:1px solid var(--line); border-radius:4px; padding:4px 6px; text-align:center;';
+    var itemCell =
+      '<div style="display:flex; align-items:center; gap:6px;">' +
         '<span style="font-weight:600; white-space:nowrap;">ตัวชี้วัด</span>' +
-        '<input id="f_stno_'+it.id+'" data-srow="'+i+'" data-scol="0" onkeydown="handleGridInputKeydown(event)" value="'+esc(it.indicatorNo)+'" placeholder="เลขท้าย เช่น 1" style="width:90px; padding:4px 6px; border:1px solid var(--line); border-radius:4px; text-align:center;" oninput="updateStructureItem(\''+it.id+'\',\'indicatorNo\',this.value)"/>' +
-      '</div>')
-      : ('<input id="f_stname_'+it.id+'" data-srow="'+i+'" data-scol="0" onkeydown="handleGridInputKeydown(event)" value="'+esc(it.name)+'" placeholder="เช่น สอบกลางภาค" oninput="updateStructureItem(\''+it.id+'\',\'name\',this.value)"/>');
-    var nameCell = showIndicatorBar ?
-      ('<input id="f_stitemname_'+it.id+'" data-srow="'+i+'" data-scol="1" onkeydown="handleGridInputKeydown(event)" value="'+esc(it.name)+'" placeholder="ชื่อ/รายละเอียดตัวชี้วัด" oninput="updateStructureItem(\''+it.id+'\',\'name\',this.value)"/>')
-      : ('<input id="f_stitemdesc_'+it.id+'" data-srow="'+i+'" data-scol="1" onkeydown="handleGridInputKeydown(event)" value="'+esc(it.desc||"")+'" placeholder="คำอธิบาย (ถ้ามี — เว้นว่างได้)" oninput="updateStructureItem(\''+it.id+'\',\'desc\',this.value)"/>');
-    return '<tr style="background:'+tint+';">' +
+        '<input id="f_stno_'+it.id+'" data-srow="'+i+'" data-scol="0" onkeydown="handleGridInputKeydown(event)" value="'+esc(it.indicatorNo)+'" placeholder="เลขท้าย เช่น 1" style="width:90px; '+inpStyle+'" oninput="updateStructureItem(\''+it.id+'\',\'indicatorNo\',this.value)"/>' +
+      '</div>';
+    var nameCell = '<input id="f_stitemname_'+it.id+'" data-srow="'+i+'" data-scol="1" onkeydown="handleGridInputKeydown(event)" value="'+esc(it.name)+'" placeholder="ชื่อ/รายละเอียดตัวชี้วัด" oninput="updateStructureItem(\''+it.id+'\',\'name\',this.value)"/>';
+    var periodCell = '<select data-srow="'+i+'" data-scol="2" onkeydown="handleGridInputKeydown(event)" style="width:100%; border:1px solid var(--line); border-radius:4px; padding:4px 6px; font-size:14px; background:white;" onchange="updateStructureItem(\''+it.id+'\',\'period\',this.value)">' +
+        '<option value="before" '+((it.period||"before")==="before"?"selected":"")+'>ก่อนกลางภาค</option>' +
+        '<option value="after" '+(it.period==="after"?"selected":"")+'>หลังกลางภาค</option>' +
+      '</select>';
+    var examInput = function(field, col){
+      return '<input id="f_st'+field+'_'+it.id+'" data-srow="'+i+'" data-scol="'+col+'" onkeydown="handleGridInputKeydown(event)" type="text" inputmode="decimal" value="'+esc(it[field] === undefined ? "" : it[field])+'" placeholder="ไม่มีสอบ" style="width:80px; '+inpStyle+'" oninput="updateStructureItem(\''+it.id+'\',\''+field+'\',this.value)"/>';
+    };
+    return '<tr style="background:var(--collect-tint);">' +
       '<td style="text-align:center;">'+(i+1)+'</td>' +
       '<td>'+itemCell+'</td>' +
       '<td>'+nameCell+'</td>' +
-      '<td style="text-align:center; padding:3px 4px;"><select data-srow="'+i+'" data-scol="2" onkeydown="handleGridInputKeydown(event)" style="width:100%; border:1px solid var(--line); border-radius:4px; padding:4px 6px; font-size:14px; background:white;" onchange="updateStructureItem(\''+it.id+'\',\'type\',this.value)">' +
-        '<option value="collect" '+(it.type==="collect"?"selected":"")+'>คะแนนเก็บ (ตัวชี้วัด)</option>' +
-        '<option value="exam" '+(it.type==="exam"?"selected":"")+'>คะแนนสอบ</option>' +
-      '</select></td>' +
-      '<td style="text-align:center; padding:3px 4px;">' + (it.type === "collect" ?
-        '<select data-srow="'+i+'" data-scol="3" onkeydown="handleGridInputKeydown(event)" style="width:100%; border:1px solid var(--line); border-radius:4px; padding:4px 6px; font-size:14px; background:white;" onchange="updateStructureItem(\''+it.id+'\',\'period\',this.value)">' +
-          '<option value="before" '+((it.period||"before")==="before"?"selected":"")+'>ก่อนกลางภาค</option>' +
-          '<option value="after" '+(it.period==="after"?"selected":"")+'>หลังกลางภาค</option>' +
-        '</select>' :
-        '<select data-srow="'+i+'" data-scol="3" onkeydown="handleGridInputKeydown(event)" style="width:100%; border:1px solid var(--line); border-radius:4px; padding:4px 6px; font-size:14px; background:white;" onchange="updateStructureItem(\''+it.id+'\',\'period\',this.value)">' +
-          '<option value="midterm" '+((it.period||"midterm")==="midterm"?"selected":"")+'>กลางภาค</option>' +
-          '<option value="final" '+(it.period==="final"?"selected":"")+'>ปลายภาค</option>' +
-        '</select>') + '</td>' +
-      '<td style="text-align:center; padding:3px 4px;"><input id="f_stmax_'+it.id+'" data-srow="'+i+'" data-scol="4" onkeydown="handleGridInputKeydown(event)" type="text" inputmode="decimal" value="'+esc(it.max)+'" style="width:70px; padding:4px 6px; border:1px solid var(--line); border-radius:4px; text-align:center;" oninput="updateStructureItem(\''+it.id+'\',\'max\',this.value)"/></td>' +
-      '<td style="text-align:center;"><button class="icon-btn" title="ลบรายการ" onclick="removeStructureItem(\''+it.id+'\')">'+icon("trash",15,"#B3432E")+'</button></td>' +
+      '<td style="text-align:center; padding:3px 4px;">'+periodCell+'</td>' +
+      '<td style="text-align:center; padding:3px 4px;"><input id="f_stmax_'+it.id+'" data-srow="'+i+'" data-scol="3" onkeydown="handleGridInputKeydown(event)" type="text" inputmode="decimal" value="'+esc(it.max)+'" style="width:70px; '+inpStyle+'" oninput="updateStructureItem(\''+it.id+'\',\'max\',this.value)"/></td>' +
+      '<td style="text-align:center; padding:3px 4px; background:var(--exam-tint);">'+examInput("midMax", 4)+'</td>' +
+      '<td style="text-align:center; padding:3px 4px; background:var(--exam-tint);">'+examInput("finMax", 5)+'</td>' +
+      '<td style="text-align:center; white-space:nowrap;">' +
+        '<button class="icon-btn" title="แทรกตัวชี้วัดใหม่ ด้านบนแถวนี้" onclick="insertStructureItem(\''+it.id+'\',\'above\')" style="font-size:12px; font-weight:700; color:var(--ink);">+↑</button>' +
+        '<button class="icon-btn" title="แทรกตัวชี้วัดใหม่ ด้านล่างแถวนี้" onclick="insertStructureItem(\''+it.id+'\',\'below\')" style="font-size:12px; font-weight:700; color:var(--ink);">+↓</button>' +
+        '<button class="icon-btn" title="ลบรายการ" onclick="removeStructureItem(\''+it.id+'\')">'+icon("trash",15,"#B3432E")+'</button>' +
+      '</td>' +
     '</tr>';
   }).join("");
+
+  /* ผลรวมแต่ละช่อง (แสดงใต้ตารางให้ครูเช็คว่าครบ 100) */
+  var sumField = function(fn){ return examRound2(displayStructure.reduce(function(a,it){ return a + fn(it); }, 0)); };
+  var sumBefore = sumField(function(it){ return (it.period||"before")==="before" ? (Number(it.max)||0) : 0; });
+  var sumAfter  = sumField(function(it){ return it.period==="after" ? (Number(it.max)||0) : 0; });
+  var sumMid    = sumField(function(it){ return examNumPos(it.midMax); });
+  var sumFin    = sumField(function(it){ return examNumPos(it.finMax); });
+
+  var examSplitBox =
+    '<div style="margin:12px 0 14px; padding:12px 16px; background:white; border:1px solid var(--line); border-radius:8px; max-width:960px;">' +
+      '<div style="font-size:15px; font-weight:600; color:var(--ink); margin-bottom:8px;">รูปแบบช่องกรอกคะแนนสอบ (กลางภาค / ปลายภาค)</div>' +
+      '<label style="display:flex; align-items:flex-start; gap:8px; margin-bottom:6px; cursor:pointer; font-size:15px;">' +
+        '<input type="radio" name="examSplitOpt" value="each" '+(examSplit==="each"?"checked":"")+' onchange="setExamSplit(\'each\')" style="margin-top:4px;"/>' +
+        '<span><b>แยกช่องคะแนนสอบแต่ละตัวชี้วัด</b> — ในหน้ากรอกคะแนน ตัวชี้วัดที่มีสอบจะมีช่องคะแนนสอบของตัวเอง</span>' +
+      '</label>' +
+      '<label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:15px;">' +
+        '<input type="radio" name="examSplitOpt" value="single" '+(examSplit==="single"?"checked":"")+' onchange="setExamSplit(\'single\')" style="margin-top:4px;"/>' +
+        '<span><b>รวมเป็นช่องเดียว</b> — ในหน้ากรอกคะแนนมีช่องคะแนนสอบกลางภาค 1 ช่อง และปลายภาค 1 ช่อง (คะแนนเต็ม = ผลรวมของตัวเลขที่กรอกในแต่ละตัวชี้วัด)</span>' +
+      '</label>' +
+    '</div>';
 
   var totalColor = comp.structureTotal === 100 ? "var(--green)" : "var(--red)";
 
@@ -5283,16 +5493,21 @@ function renderStructure(s, comp){
     '</span>' +
   '</div>' +
   '<div style="font-size:15px; font-weight:600; color:var(--ink); margin-bottom:8px;">อัตราส่วนคะแนนรายวิชานี้ = '+midpathTotal+':'+finalpathTotal+'</div>' +
-  '<div class="section-sub">กำหนดรายการคะแนนของวิชานี้ — แต่ละรายการเป็น "คะแนนเก็บ (ตัวชี้วัด)" หรือ "คะแนนสอบ" อย่างใดอย่างหนึ่ง ผลรวมต้องครบ 100 · รายการ "ตัวชี้วัด" จะขึ้นคำว่า "ตัวชี้วัด" ให้อัตโนมัติทุกครั้งที่กดเพิ่ม กรอกแค่เลขท้าย (เช่น 1, 2.1) และตั้งชื่อ/รายละเอียดแยกในช่อง "ชื่อ" ได้ · รายการคะแนนเก็บกำหนดช่วงเวลาได้ว่า "ก่อนกลางภาค" หรือ "หลังกลางภาค" · รายการคะแนนสอบกำหนดได้ว่าเป็น "กลางภาค" หรือ "ปลายภาค" เพื่อจัดกลุ่มและคำนวณยอดรวมย่อยในหน้ากรอกคะแนน · รายการคะแนนสอบใส่ "คำอธิบาย" เพิ่มเติมได้ (ไม่บังคับ) — ถ้าสอบกลางภาค/ปลายภาคมีหลายรายการแต่ไม่ได้ใส่คำอธิบายเลยสักรายการ ตอนพิมพ์หน้าโครงสร้างรายวิชาจะรวมรายการเหล่านั้นแสดงเป็นแถวเดียวให้อัตโนมัติ</div>' +
+  '<div class="section-sub">กำหนดตัวชี้วัดของวิชานี้ — กรอกเลขท้ายตัวชี้วัด (เช่น 1, 2.1) ชื่อ/รายละเอียด ช่วงเวลา (ก่อน/หลังกลางภาค) และคะแนนเต็มของคะแนนเก็บ · ต่อท้ายตัวชี้วัดมีช่อง <b>คะแนนสอบกลางภาค</b> และ <b>คะแนนสอบปลายภาค</b> ให้กรอก <b>ถ้าตัวชี้วัดข้อไหนไม่มีสอบ ให้เว้นช่องนั้นไว้ว่าง</b> · ผลรวมทุกช่องต้องครบ 100 · เลือกด้านล่างได้ว่าคะแนนสอบจะแยกช่องตามตัวชี้วัด หรือรวมเป็นช่องเดียว</div>' +
+  examSplitBox +
   '<div class="table-scroll"><table class="ptable" style="max-width:960px;"><thead><tr>' +
-    '<th style="width:40px;">ที่</th><th style="width:120px;">ตัวชี้วัด</th><th style="width:260px;">ชื่อรายการ</th><th style="width:160px;">ประเภท</th><th style="width:140px;">ช่วงเวลา</th><th style="width:100px;">คะแนนเต็ม</th><th style="width:40px;"></th>' +
-  '</tr></thead><tbody>'+rows+'</tbody></table></div>' +
+    '<th style="width:40px;">ที่</th><th style="width:120px;">ตัวชี้วัด</th><th style="width:260px;">ชื่อรายการ</th><th style="width:140px;">ช่วงเวลา</th><th style="width:100px;">คะแนนเก็บ<br/>เต็ม</th><th style="width:110px; background:var(--exam-tint);">คะแนนสอบ<br/>กลางภาค</th><th style="width:110px; background:var(--exam-tint);">คะแนนสอบ<br/>ปลายภาค</th><th style="width:110px;">แทรก / ลบ</th>' +
+  '</tr></thead><tbody>'+rows+'</tbody>' +
+  '<tfoot><tr style="background:#EEEEEE; font-weight:600;"><td colspan="3" style="text-align:right; padding:6px 10px;">รวมแต่ละช่อง</td>' +
+    '<td style="text-align:center; font-size:12px; font-weight:400;">ก่อน '+sumBefore+' · หลัง '+sumAfter+'</td>' +
+    '<td style="text-align:center;">'+examRound2(sumBefore+sumAfter)+'</td>' +
+    '<td style="text-align:center;">'+sumMid+'</td><td style="text-align:center;">'+sumFin+'</td><td></td></tr></tfoot>' +
+  '</table></div>' +
   '<div class="struct-actions">' +
     '<div class="sa-title">เพิ่มรายการ</div>' +
     '<div class="sa-grid">' +
       '<button class="btn-outline" onclick="addStructureItem(\'collect\',\'before\')">'+icon("plus",15)+' เพิ่มตัวชี้วัด (ก่อนกลางภาค)</button>' +
       '<button class="btn-outline" onclick="addStructureItem(\'collect\',\'after\')">'+icon("plus",15)+' เพิ่มตัวชี้วัด (หลังกลางภาค)</button>' +
-      '<button class="btn-outline" style="border-color:#6B5B75; color:#6B5B75;" onclick="addStructureItem(\'exam\')">'+icon("plus",15)+' เพิ่มคะแนนสอบ</button>' +
     '</div>' +
     '<div class="sa-title" style="margin-top:14px;">เพิ่มหลายรายการ / นำเข้าจาก Excel</div>' +
     '<div class="sa-grid">' +
@@ -5903,11 +6118,15 @@ function cellOrBlank(n){ return n ? n : ""; }
 function pctCellOrBlank(count, total){ return count ? fmt2((count/total)*100) : ""; }
 
 function renderGradeSummaryAndApproval(s, comp, info){
+  /* ระดับประถมศึกษา พิมพ์แบบรายภาคเรียน: ไม่ตัดเกรดรายเทอม (รอสรุปรวมทั้งปี)
+     หน้าปกจึงแสดงเฉพาะ "จำนวนนักเรียนทั้งหมด" และ "มส" ส่วนช่องเกรด 0-4, ร, ร้อยละ, ค่าเฉลี่ย, ส่วนเบี่ยงเบนฯ เว้นว่างไว้
+     (ตารางอ่าน/คิด/เขียน และคุณลักษณะฯ ยังแสดงตามปกติ) — หน้าปกแบบรวมทั้งปีเรียกฟังก์ชันนี้ด้วย s = null จึงไม่กระทบ */
+  var termPrimary = isYearOnlyGradeLevel(s);
   var gradeCells = GRADE_LEVELS.map(function(g){
-    return '<td style="text-align:center; border:1px solid #333; padding:4px 3px;'+(g===0?" color:#B3432E; font-weight:700;":"")+'">'+cellOrBlank(comp.gradeCounts[g])+'</td>';
+    return '<td style="text-align:center; border:1px solid #333; padding:4px 3px;'+(g===0?" color:#B3432E; font-weight:700;":"")+'">'+(termPrimary ? "" : cellOrBlank(comp.gradeCounts[g]))+'</td>';
   }).join("");
   var gradePctCells = GRADE_LEVELS.map(function(g){
-    return '<td style="text-align:center; border:1px solid #333; padding:4px 3px;">'+pctCellOrBlank(comp.gradeCounts[g], comp.totalStudents)+'</td>';
+    return '<td style="text-align:center; border:1px solid #333; padding:4px 3px;">'+(termPrimary ? "" : pctCellOrBlank(comp.gradeCounts[g], comp.totalStudents))+'</td>';
   }).join("");
   var gradeHeaderCells = GRADE_LEVELS.map(function(g){ return '<th style="border:1px solid #333; padding:4px 3px; font-weight:600;">'+g+'</th>'; }).join("");
 
@@ -5933,12 +6152,12 @@ function renderGradeSummaryAndApproval(s, comp, info){
       '<tbody>' +
         '<tr><td style="text-align:center; border:1px solid #333; padding:3px; font-weight:700;">'+comp.totalStudents+'</td>' +
           gradeCells +
-          '<td style="text-align:center; border:1px solid #333; padding:3px;">'+cellOrBlank(comp.rCount)+'</td>' +
+          '<td style="text-align:center; border:1px solid #333; padding:3px;">'+(termPrimary ? "" : cellOrBlank(comp.rCount))+'</td>' +
           '<td style="text-align:center; border:1px solid #333; padding:3px;">'+cellOrBlank(comp.msCount)+'</td>' +
           '<td style="border:1px solid #333; padding:3px;"></td></tr>' +
         '<tr><td style="border:1px solid #333; padding:3px;">คิดเป็นร้อยละ</td>' +
           gradePctCells +
-          '<td style="text-align:center; border:1px solid #333; padding:3px;">'+pctCellOrBlank(comp.rCount, comp.totalStudents)+'</td>' +
+          '<td style="text-align:center; border:1px solid #333; padding:3px;">'+(termPrimary ? "" : pctCellOrBlank(comp.rCount, comp.totalStudents))+'</td>' +
           '<td style="text-align:center; border:1px solid #333; padding:3px;">'+pctCellOrBlank(comp.msCount, comp.totalStudents)+'</td>' +
           '<td style="border:1px solid #333; padding:3px;"></td></tr>' +
       '</tbody>' +
@@ -5947,14 +6166,14 @@ function renderGradeSummaryAndApproval(s, comp, info){
     '<table class="cover-table" style="width:100%; table-layout:fixed; border-collapse:collapse; margin-top:8px;">' +
       '<tr>' +
         '<td style="border:1px solid #333; padding:3px 8px; width:42%;">ร้อยละของนักเรียนที่ได้ผลการเรียนระดับดี(3) ขึ้นไป</td>' +
-        '<td style="border:1px solid #333; padding:3px 8px; text-align:center; width:8%;">'+fmt2(comp.percentGoodAbove)+'</td>' +
+        '<td style="border:1px solid #333; padding:3px 8px; text-align:center; width:8%;">'+(termPrimary ? "" : fmt2(comp.percentGoodAbove))+'</td>' +
         '<td style="border:1px solid #333; padding:3px 8px; width:32%;">ผลการเรียนเฉลี่ยของรายวิชา</td>' +
-        '<td style="border:1px solid #333; padding:3px 8px; text-align:center; width:18%;">'+fmt2(comp.classAverage)+'</td>' +
+        '<td style="border:1px solid #333; padding:3px 8px; text-align:center; width:18%;">'+(termPrimary ? "" : fmt2(comp.classAverage))+'</td>' +
       '</tr><tr>' +
         '<td style="border:1px solid #333; padding:3px 8px; width:42%;">ร้อยละของนักเรียนที่ไม่ผ่านการประเมิน</td>' +
-        '<td style="border:1px solid #333; padding:3px 8px; text-align:center; width:8%;">'+fmt2(comp.percentFail)+'</td>' +
+        '<td style="border:1px solid #333; padding:3px 8px; text-align:center; width:8%;">'+(termPrimary ? "" : fmt2(comp.percentFail))+'</td>' +
         '<td style="border:1px solid #333; padding:3px 8px;">ส่วนเบี่ยงเบนมาตรฐาน</td>' +
-        '<td style="border:1px solid #333; padding:3px 8px; text-align:center;">'+fmt2(comp.stdDev)+'</td>' +
+        '<td style="border:1px solid #333; padding:3px 8px; text-align:center;">'+(termPrimary ? "" : fmt2(comp.stdDev))+'</td>' +
       '</tr>' +
     '</table>' +
 
@@ -6199,67 +6418,45 @@ function renderTotalScorePrintPage(s, comp, pageNum, breakAfter, hideGrade){
 
 /* ---- print: โครงสร้างรายวิชา ---- */
 function renderStructurePrintPage(s, pageNum, breakAfter){
-  var collectItems = s.structure.filter(function(it){ return it.type !== "exam"; });
-  var midtermItems = s.structure.filter(function(it){ return it.type==="exam" && (it.period||"midterm")==="midterm"; });
-  var finalItems = s.structure.filter(function(it){ return it.type==="exam" && it.period==="final"; });
-
-  function hasAnyDesc(items){
-    return items.some(function(it){ return it.desc && String(it.desc).trim() !== ""; });
+  /* ตารางโครงสร้างรายวิชาแบบพิมพ์: 1 แถว = 1 ตัวชี้วัด
+     คอลัมน์: ตัวชี้วัด | รายการ | ก่อน(กลางภาค) | หลัง(กลางภาค) | กลางภาค | ปลายภาค ; แถวล่างสุด = คะแนนรวมแต่ละช่อง
+     ใช้สำเนาของวิชาที่ผ่าน normalizeExamStructure แล้ว เพื่อให้ข้อมูลเก่า/ข้อมูลปีการศึกษาที่บันทึกไว้แสดงถูกต้องด้วย */
+  var sc = deepCopy(s);
+  normalizeExamStructure(sc);
+  var split = getExamSplit(sc);
+  var collectItems = sc.structure.filter(function(it){ return it.type !== "exam"; });
+  var nRows = collectItems.length;
+  var cellStyle = 'border:1px solid #333; text-align:center; padding:4px;';
+  function numCell(v){
+    var n = Number(v);
+    return '<td style="'+cellStyle+'">'+(isFinite(n) && n > 0 ? esc(v) : "")+'</td>';
   }
-  /* รายการคะแนนสอบช่วงเดียวกัน (กลางภาค/ปลายภาค):
-     - มีมากกว่า 1 รายการ -> แยกแสดงเป็นรายรายการเสมอ พร้อมเลขตัวชี้วัด (เหมือนหน้ากรอกคะแนน/หน้าพิมพ์ผลสอบ)
-     - มีรายการเดียว -> แสดงแบบเดิม (รวมเป็นแถวเดียวถ้าไม่ได้ใส่คำอธิบาย, หรือแยกโชว์ชื่อ+คำอธิบายถ้าใส่ไว้) */
-  function examGroupRows(items, periodLabel){
-    if (!items.length) return [];
-    if (items.length > 1){
-      return items.map(function(it){
-        return { indicator: structureItemLabelInGroup(it, items), name: it.name || "", kind:"คะแนนสอบ - "+periodLabel, max: it.max };
-      });
-    }
-    if (!hasAnyDesc(items)){
-      var sumMax = items.reduce(function(sum,it){ return sum + (Number(it.max)||0); }, 0);
-      return [{ indicator:"", name: items[0].name || ("สอบ"+periodLabel), kind:"คะแนนสอบ - "+periodLabel, max:sumMax }];
-    }
-    return items.map(function(it){
-      return { indicator: it.name||"", name: it.desc||"", kind:"คะแนนสอบ - "+periodLabel, max: it.max };
-    });
-  }
+  var midTotal = examRound2(collectItems.reduce(function(a,it){ return a + examNumPos(it.midMax); }, 0));
+  var finTotal = examRound2(collectItems.reduce(function(a,it){ return a + examNumPos(it.finMax); }, 0));
+  var beforeTotal = examRound2(collectItems.reduce(function(a,it){ return a + ((it.period||"before")==="before" ? (Number(it.max)||0) : 0); }, 0));
+  var afterTotal = examRound2(collectItems.reduce(function(a,it){ return a + (it.period==="after" ? (Number(it.max)||0) : 0); }, 0));
+  var total = examRound2(beforeTotal + afterTotal + midTotal + finTotal);
 
-  var rowObjs = collectItems.map(function(it){
-    return {
-      indicator: structureItemLabel(it),
-      name: it.name || "",
-      kind: "คะแนนเก็บ - " + (it.period==="after" ? "หลังกลางภาค" : "ก่อนกลางภาค"),
-      max: it.max
-    };
-  }).concat(examGroupRows(midtermItems, "กลางภาค")).concat(examGroupRows(finalItems, "ปลายภาค"));
-
-  var rows = rowObjs.map(function(r, i){
-    return '<tr><td style="border:1px solid #333; text-align:center; padding:4px;">'+(i+1)+'</td>' +
-      '<td style="border:1px solid #333; padding:3px 8px;">'+esc(r.indicator)+'</td>' +
-      '<td style="border:1px solid #333; padding:3px 8px;">'+(r.name ? esc(r.name) : "—")+'</td>' +
-      '<td style="border:1px solid #333; text-align:left; vertical-align:middle; padding:3px 8px;">'+r.kind+'</td>' +
-      '<td style="border:1px solid #333; text-align:center; padding:3px;">'+esc(r.max)+'</td></tr>';
+  var rows = collectItems.map(function(it, i){
+    var isAfter = it.period === "after";
+    /* ตารางโครงสร้างแยกเป็นรายตัวชี้วัดเสมอ ไม่ว่าจะเลือกคะแนนสอบแบบแยกช่องหรือรวมเป็นช่องเดียว */
+    var examCells = numCell(it.midMax === undefined ? "" : examNumPos(it.midMax)) + numCell(it.finMax === undefined ? "" : examNumPos(it.finMax));
+    return '<tr>' +
+      '<td style="border:1px solid #333; padding:3px 8px;">'+esc(structureItemLabel(it))+'</td>' +
+      '<td style="border:1px solid #333; padding:3px 8px;">'+(it.name ? esc(it.name) : "—")+'</td>' +
+      (isAfter ? numCell("") : numCell(it.max)) +
+      (isAfter ? numCell(it.max) : numCell("")) +
+      examCells +
+    '</tr>';
   }).join("");
-  var total = s.structure.reduce(function(sum,it){ return sum + (Number(it.max)||0); }, 0);
-  function sumMax(filterFn){ return s.structure.filter(filterFn).reduce(function(sum,it){ return sum + (Number(it.max)||0); }, 0); }
-  var beforeTotal = sumMax(function(it){ return it.type==="collect" && (it.period||"before")==="before"; });
-  var afterTotal = sumMax(function(it){ return it.type==="collect" && it.period==="after"; });
-  var midtermTotal = sumMax(function(it){ return it.type==="exam" && (it.period||"midterm")==="midterm"; });
-  var finalTotal = sumMax(function(it){ return it.type==="exam" && it.period==="final"; });
 
   var totalRows =
-    '<tr style="background:#EEEEEE;">' +
-      '<td colspan="3" style="border:1px solid #333; text-align:center; padding:4px; font-weight:700;">คะแนนรวม</td>' +
-      '<td colspan="2" style="border:1px solid #333; padding:0;">' +
-        '<table style="width:100%; border-collapse:collapse; table-layout:fixed;"><tr>' +
-          '<td style="border-right:1px solid #333; text-align:center; padding:4px; font-weight:700;">'+beforeTotal+'</td>' +
-          '<td style="border-right:1px solid #333; text-align:center; padding:4px; font-weight:700;">'+afterTotal+'</td>' +
-          '<td style="border-right:1px solid #333; text-align:center; padding:4px; font-weight:700;">'+midtermTotal+'</td>' +
-          '<td style="border-right:1px solid #333; text-align:center; padding:4px; font-weight:700;">'+finalTotal+'</td>' +
-          '<td style="text-align:center; padding:4px; font-weight:700;">'+total+'</td>' +
-        '</tr></table>' +
-      '</td>' +
+    '<tr style="background:#EEEEEE; font-weight:700;">' +
+      '<td colspan="2" style="border:1px solid #333; text-align:center; padding:4px;">คะแนนรวม</td>' +
+      '<td style="'+cellStyle+'">'+beforeTotal+'</td>' +
+      '<td style="'+cellStyle+'">'+afterTotal+'</td>' +
+      '<td style="'+cellStyle+'">'+midTotal+'</td>' +
+      '<td style="'+cellStyle+'">'+finTotal+'</td>' +
     '</tr>';
 
   function nameListTable(items, title){
@@ -6284,11 +6481,15 @@ function renderStructurePrintPage(s, pageNum, breakAfter){
     '<div style="text-align:center; font-size:18px; font-weight:700; margin-bottom:4px;">โครงสร้างรายวิชา</div>' +
     '<div style="text-align:center; font-size:16px; margin-bottom:4px;">รายวิชา'+esc(s.subject)+' รหัสวิชา '+esc(s.subjectCode)+'   ชั้น'+esc(s.className)+'   ภาคเรียนที่ '+esc(termNumberOnly(s.term))+'</div>' +
     '<div style="text-align:center; font-size:18px; font-weight:700; margin-bottom:14px;">อัตราส่วนคะแนนรายวิชานี้ = '+midpathTotal+':'+finalpathTotal+'</div>' +
-    '<table style="width:100%; border-collapse:collapse; font-size:15px; line-height:0.9;"><thead><tr style="background:#EEEEEE;">' +
-      '<th style="border:1px solid #333; padding:4px; width:40px;">ที่</th><th style="border:1px solid #333; padding:4px; width:95px;">ตัวชี้วัด</th>' +
-      '<th style="border:1px solid #333; padding:4px;">ชื่อรายการ</th>' +
-      '<th style="border:1px solid #333; padding:4px; width:140px;">ประเภท / ช่วงเวลา</th><th style="border:1px solid #333; padding:4px; width:70px;">คะแนนเต็ม</th>' +
+    '<table style="width:100%; border-collapse:collapse; table-layout:fixed; font-size:15px; line-height:0.9;"><thead><tr style="background:#EEEEEE;">' +
+      '<th style="border:1px solid #333; padding:4px; width:72px;">ตัวชี้วัด</th>' +
+      '<th style="border:1px solid #333; padding:4px;">รายการ</th>' +
+      '<th style="border:1px solid #333; padding:4px; width:64px;">ก่อน<br/>(กลางภาค)</th>' +
+      '<th style="border:1px solid #333; padding:4px; width:64px;">หลัง<br/>(กลางภาค)</th>' +
+      '<th style="border:1px solid #333; padding:4px; width:60px;">กลางภาค</th>' +
+      '<th style="border:1px solid #333; padding:4px; width:60px;">ปลายภาค</th>' +
     '</tr></thead><tbody>'+rows+totalRows+'</tbody></table>' +
+    '<div style="margin-top:6px; font-size:15px; font-weight:700; text-align:right;">คะแนนรวมทั้งสิ้น '+total+' คะแนน</div>' +
     nameListTable(s.desirable, "รายชื่อคุณลักษณะอันพึงประสงค์ (แยกจากตารางคะแนน)") +
     nameListTable(s.readWrite, "รายชื่อการอ่าน เขียน คิดวิเคราะห์ (แยกจากตารางคะแนน)") +
   '</div>';
@@ -7087,29 +7288,29 @@ var dsDesirable = dsRating(function(s){ return s.desirable; }, function(s){ retu
 var dsReadWrite = dsRating(function(s){ return s.readWrite; }, function(s){ return s.readWriteScores; }, "readWriteAvg", "readWriteLevelText");
 
 function dsStructItems(s, comp, id){
+  /* รูปแบบเดียวกับตารางพิมพ์โครงสร้างรายวิชา: ตัวชี้วัด | รายการ | ก่อน(กลางภาค) | หลัง(กลางภาค) | กลางภาค | ปลายภาค
+     แถวท้ายตาราง = คะแนนรวมแต่ละช่อง (ใช้ตัวเลือก "เพิ่มแถวคะแนนรวม" ซึ่งเปิดไว้เป็นค่าเริ่มต้น)
+     แยกเป็นรายตัวชี้วัดเสมอ ไม่ว่าจะเลือกคะแนนสอบแบบแยกช่องหรือรวมเป็นช่องเดียว */
   var G = "โครงสร้างรายวิชา";
-  var items = structureSortedForDisplay(s);
-  function groupOf(it){
-    return it.type === "exam" ? s.structure.filter(function(x){
-      return x.type === "exam" && (x.period || "midterm") === (it.period || "midterm");
-    }) : null;
+  var items = s.structure.filter(function(it){ return it.type !== "exam"; });
+  function examTotal(field){ return examRound2(items.reduce(function(a, it){ return a + examNumPos(it[field]); }, 0)); }
+  function posOrBlank(v){ var n = Number(v); return (isFinite(n) && n > 0) ? v : ""; }
+  function examCell(field){
+    return function(r){ var n = examNumPos(r[field]); return n > 0 ? n : ""; };
   }
-  function hasBar(it){ return it.type === "collect" || examItemNeedsIndicatorBar(it, groupOf(it)); }
   return {
-    studentRows:false, totalRow:true, rows:items,
+    studentRows:false, totalRow:true, totalLabel:"คะแนนรวม", rows:items,
     cols:[
-      { key:"idx", label:"ที่", group:G, def:true, get:function(r, i){ return i + 1; } },
-      { key:"item", label:"ตัวชี้วัด / รายการ", group:G, def:true, get:function(r){ return structureItemLabelInGroup(r, groupOf(r)); } },
-      { key:"name", label:"ชื่อรายการ / คำอธิบาย", group:G, def:true, get:function(r){ return hasBar(r) ? (r.name || "") : (r.desc || ""); } },
-      { key:"type", label:"ประเภท", group:G, def:true, get:function(r){ return r.type === "collect" ? "คะแนนเก็บ (ตัวชี้วัด)" : "คะแนนสอบ"; } },
-      { key:"period", label:"ช่วงเวลา", group:G, def:true, get:function(r){
-        return r.type === "collect" ? ((r.period || "before") === "before" ? "ก่อนกลางภาค" : "หลังกลางภาค")
-          : ((r.period || "midterm") === "midterm" ? "กลางภาค" : "ปลายภาค");
-      } },
-      { key:"max", label:"คะแนนเต็ม", group:G, def:true, get:function(r){ return r.max; },
-        total:function(rows){ return rows.reduce(function(sum, it){ return sum + (Number(it.max) || 0); }, 0); } }
+      { key:"item", label:"ตัวชี้วัด", group:G, def:true, get:function(r){ return structureItemLabel(r); } },
+      { key:"name", label:"รายการ", group:G, def:true, get:function(r){ return r.name || ""; } },
+      { key:"before", label:"ก่อน(กลางภาค)", group:G, def:true, get:function(r){ return (r.period || "before") === "before" ? posOrBlank(r.max) : ""; },
+        total:function(rows){ return examRound2(rows.reduce(function(a, it){ return a + ((it.period || "before") === "before" ? (Number(it.max) || 0) : 0); }, 0)); } },
+      { key:"after", label:"หลัง(กลางภาค)", group:G, def:true, get:function(r){ return r.period === "after" ? posOrBlank(r.max) : ""; },
+        total:function(rows){ return examRound2(rows.reduce(function(a, it){ return a + (it.period === "after" ? (Number(it.max) || 0) : 0); }, 0)); } },
+      { key:"mid", label:"กลางภาค", group:G, def:true, get:examCell("midMax"), total:function(){ return examTotal("midMax"); } },
+      { key:"fin", label:"ปลายภาค", group:G, def:true, get:examCell("finMax"), total:function(){ return examTotal("finMax"); } }
     ],
-    opts:[{ key:"totalRow", type:"check", def:false, label:"เพิ่มแถวรวมคะแนนเต็มท้ายตาราง" }]
+    opts:[{ key:"totalRow", type:"check", def:true, label:"เพิ่มแถวคะแนนรวมแต่ละช่องท้ายตาราง" }]
   };
 }
 function dsNameList(listFn, title){
@@ -7240,7 +7441,7 @@ function matrixOf(ds){
     var labelled = false;
     total = cols.map(function(c){
       if (c.total) return String(c.total(rows));
-      if (!labelled){ labelled = true; return "รวม"; }
+      if (!labelled){ labelled = true; return ds.totalLabel || "รวม"; }
       return "";
     });
   }
