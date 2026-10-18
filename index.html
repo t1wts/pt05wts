@@ -79,7 +79,7 @@
   .nav-btn{
     width:100%; display:flex; align-items:center; gap:9px; padding:10px 12px; margin-bottom:4px;
     border-radius:6px; border:none; cursor:pointer; background:transparent; color:#EDE9DD;
-    font-size:16.5px; text-align:left;
+    font-size:18px; text-align:left;
   }
   .nav-btn.active{ background:rgba(184,134,46,0.18); color:var(--gold-on-dark); font-weight:600; }
   .nav-btn:hover:not(.active){ background:rgba(244,241,232,0.06); }
@@ -93,6 +93,8 @@
   }
   .side-btn:hover{ background:rgba(244,241,232,0.08); }
   .side-btn.danger{ color:#E9B7A8; border-color:rgba(233,183,168,0.4); }
+  .data-controls .side-btn{ font-size:15.5px; }
+  .data-controls #cloudUser{ font-size:13.5px; }
 
   .main{ flex:1; min-width:0; padding:28px 36px; max-width:none; }
   .struct-actions{ max-width:960px; margin-top:14px; padding:14px 16px; background:#fff; border:1px solid var(--line); border-radius:10px; }
@@ -110,6 +112,10 @@
     .sidebar{ position:sticky; top:0; align-self:flex-start; height:100vh; height:100dvh; overflow-y:auto; overflow-x:hidden;
       scrollbar-width:none; -ms-overflow-style:none; }
     .sidebar::-webkit-scrollbar{ display:none; }
+  /* โหมดย่อ (fitSidebar เพิ่มคลาส sb-fit): ตัวอักษรเมนูใหญ่ขึ้น ช่องไฟแนวตั้งแน่นขึ้น */
+  .sidebar.sb-fit .nav-btn{ font-size:20px; padding:5px 12px; margin-bottom:2px; }
+  .sidebar.sb-fit .data-controls .side-btn{ font-size:17px; padding:4px 10px; margin-bottom:4px; }
+  .sidebar.sb-fit .data-controls #cloudUser{ font-size:15px; margin:6px 0 4px !important; }
     .sidebar > *{ flex-shrink:0; zoom:var(--sbz,1); }   /* --sbz = สัดส่วนย่อ ให้ฟังก์ชัน fitSidebar() คำนวณให้พอดีความสูงจอ */
   }
 
@@ -197,7 +203,7 @@
 
   @page{
     size: A4;
-    margin: 6mm 8mm;
+    margin: 6mm 2mm 6mm 14mm; /* เว้นขอบซ้ายสำหรับเข้าเล่ม (ซ้าย 14mm / ขวา 2mm) */
     /* removes the browser's default print header (title/URL/date) and
        footer (file path/page number) on browsers that support @page margin boxes */
     margin-header: 0;
@@ -285,10 +291,12 @@
     .subject-box{ padding:8px 14px; }
     .subject-actions{ margin-top:6px; }
     .nav{ padding:6px 10px; }
-    .nav-btn{ padding:7px 12px; margin-bottom:2px; font-size:16px; }
+    .nav-btn{ padding:7px 12px; margin-bottom:2px; font-size:17.5px; }
     .data-controls{ padding:8px 14px; }
     .save-note{ min-height:0; margin-bottom:4px; }
     .side-btn{ padding:6px 10px; margin-bottom:5px; font-size:13px; }
+    .data-controls .side-btn{ font-size:15px; }
+    .data-controls #cloudUser{ font-size:13px; }
     .sidebar > *{ flex-shrink:0; }
     .overlay.open{
       display:block; position:fixed; inset:0; background:rgba(0,0,0,0.35); z-index:30;
@@ -7005,10 +7013,14 @@ setTimeout(function(){ var n=document.getElementById("saveNote"); if(n) n.textCo
 function fitSidebar(){
   var sb = document.getElementById("sidebarEl");
   if (!sb) return;
-  if (window.innerWidth <= 880){ sb.style.removeProperty("--sbz"); return; }
+  if (window.innerWidth <= 880){ sb.style.removeProperty("--sbz"); sb.classList.remove("sb-fit"); return; }
   var z = 1;
+  sb.classList.remove("sb-fit");
   sb.style.setProperty("--sbz", "1");
   var avail = sb.clientHeight;
+  if (sb.scrollHeight <= avail + 1) return;
+  /* เนื้อหาสูงเกินจอ: เปิดโหมดตัวอักษรใหญ่ขึ้น + ช่องไฟแนวตั้งแน่นขึ้น ก่อนย่อ เพื่อให้ตอนย่อแล้วตัวอักษรยังใหญ่กว่าเดิม */
+  sb.classList.add("sb-fit");
   if (sb.scrollHeight <= avail + 1) return;
   z = Math.max(0.55, (avail - 36) / (sb.scrollHeight - 36));
   for (var k = 0; k < 8; k++){
