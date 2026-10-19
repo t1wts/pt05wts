@@ -261,24 +261,20 @@
     }
   }
 
-  /* iPhone/iPad (Safari, Chrome, Google บน iOS ใช้เอนจินเดียวกัน): iOS ไม่รับค่าขอบจาก @page และจัดหน้าพิมพ์กว้างกว่ากระดาษ
-     ~1.26 เท่า แล้วย่อลงเหลือ ~79% เสมอ (ตัวเลข "มาตราส่วน 79%" ในหน้าต่างพิมพ์) ทำให้เนื้อหาเล็กและมีขอบกว้างเกินจริง
-     จึงขยายหน้าเอกสาร 1.26 เท่า (zoom) ให้หลังถูกย่อ 79% แล้วได้ขนาดจริงเท่าบนคอม และเว้นขอบซ้ายสำหรับเข้าเล่มเอง
-     ปรับขอบได้ที่ --ios-bind (ซ้ายเพิ่มจากกึ่งกลาง) และ --ios-top (ขอบบน) · คอมและ Android ไม่ถูกแตะ */
+  /* iPhone/iPad (Safari, Chrome, Google บน iOS ใช้เอนจินเดียวกัน): iOS ไม่รับค่าขอบจาก @page
+     จึงเว้นขอบซ้ายสำหรับเข้าเล่มด้วยการดันเนื้อหาในหน้าเอง (ปรับค่าได้ที่ --ios-bind) · คอมและ Android ไม่ถูกแตะ */
   @media print{
-    html.ios-print{ --ios-zoom:1.26; --ios-bind:6mm; --ios-top:6mm; }
-    html.ios-print .cover-page,
+    html.ios-print{ --ios-bind:8mm; }
+    /* ลดความกว้างลง --ios-bind แล้วดันไปทางขวา --ios-bind/2 (หน้ายังอยู่กึ่งกลาง) => ขอบซ้ายเพิ่ม --ios-bind, ขอบขวาเท่าเดิม */
+    html.ios-print .cover-page{ width:calc(186mm - var(--ios-bind)); position:relative; left:calc(var(--ios-bind) / 2); }
     html.ios-print .roster-page,
     html.ios-print .attendance-page,
-    html.ios-print .scores-page{
-      zoom:var(--ios-zoom); position:relative; left:var(--ios-bind);
-      border-top:var(--ios-top) solid transparent;
-    }
-    html.ios-print .cover-page{ min-height:calc(277mm + var(--ios-top)); }
-    html.ios-print .roster-page,
-    html.ios-print .attendance-page,
-    html.ios-print .scores-page{ min-height:calc(285mm + var(--ios-top)); }
+    html.ios-print .scores-page{ width:calc(194mm - var(--ios-bind)); left:calc(var(--ios-bind) / 2); }
   }
+
+  /* ปุ่ม "บันทึกเป็น PDF": แสดงเฉพาะ iPhone/iPad (คอมและ Android ไม่เห็น) */
+  .pdf-btn{ display:none !important; }
+  html.ios-print .pdf-btn{ display:inline-flex !important; }
 
   @page landscape-page{
     size: A4 landscape;
@@ -5656,6 +5652,7 @@ function renderSummary(s, comp){
   '</div>' +
   '<div style="display:flex; gap:10px; flex-wrap:wrap;">' +
     '<button class="btn-solid" onclick="window.print()">'+icon("printer",16,"#fff")+' พิมพ์เอกสาร ปถ.05</button>' +
+    '<button class="btn-outline pdf-btn" onclick="exportPdf()">'+icon("printer",16)+' บันทึกเป็น PDF (พิมพ์จากมือถือ)</button>' +
     '<button class="btn-outline" onclick="exportPrintTablesToExcel(\'subject\')">'+icon("upload",16)+' ส่งออกเป็น Excel</button>' +
   '</div>' +
   '<div style="margin-top:18px; font-size:14px; color:var(--gray); line-height:1.7;">' +
@@ -5748,6 +5745,7 @@ function renderYearGrade(){
     '<div style="margin-top:10px; font-size:14px;">เกรดเฉลี่ยของห้อง (ทั้งปี): '+(ys.classAverage!==null?ys.classAverage:"-")+'</div>' +
     '<div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">' +
       '<button class="btn-solid" onclick="printYearGrade()">'+icon("printer",16,"#fff")+' พิมพ์เอกสารสรุปปีการศึกษา</button>' +
+      '<button class="btn-outline pdf-btn" onclick="exportPdf()">'+icon("printer",16)+' บันทึกเป็น PDF (พิมพ์จากมือถือ)</button>' +
       '<button class="btn-outline" onclick="exportPrintTablesToExcel(\'year\')">'+icon("upload",16)+' ส่งออกเป็น Excel</button>' +
     '</div>';
 
@@ -7947,6 +7945,162 @@ auth.onAuthStateChanged(function(u){
     else { status("โหลดข้อมูลไม่สำเร็จ"); alert("โหลดข้อมูลจากคลาวด์ไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วรีเฟรชหน้า"); }
   });
 });
+})();
+</script>
+<script>
+/* ===== บันทึกเป็น PDF (A4) สำหรับ iPhone/iPad =====
+   iOS จัดหน้าพิมพ์เองและย่อเนื้อหา จึงสร้างไฟล์ PDF ขนาด A4 จากหน้าพิมพ์ของโปรแกรมโดยตรง (ขอบกำหนดเองได้ที่ CFG)
+   ปุ่มจะแสดงเฉพาะบน iOS (html.ios-print) · ไม่ยุ่งกับคำสั่งพิมพ์ของคอม/Android · โหลดไลบรารีจากอินเทอร์เน็ตตอนกดปุ่มครั้งแรกเท่านั้น */
+(function(){
+  var CFG = {
+    marginLeft: 12,     /* มม. ด้านซ้าย (เว้นเข้าเล่ม) */
+    marginRight: 3,     /* มม. ด้านขวา */
+    marginTop: 5,       /* มม. ด้านบน */
+    marginBottom: 4,    /* มม. ด้านล่าง */
+    designWidthMm: 194, /* ความกว้างหน้าพิมพ์ตามที่ออกแบบไว้ (roster/attendance/scores) */
+    scale: 2.5,         /* ความละเอียดภาพ (ยิ่งมากยิ่งคมแต่ไฟล์ใหญ่/ช้า) */
+    quality: 0.9,       /* คุณภาพ JPEG */
+    html2canvasUrl: "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js",
+    jspdfUrl: "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"
+  };
+  var A4W = 210, A4H = 297, PX_PER_MM = 96 / 25.4;
+
+  function loadScript(src){
+    return new Promise(function(resolve, reject){
+      var s = document.createElement("script");
+      s.src = src; s.async = true;
+      s.onload = function(){ resolve(); };
+      s.onerror = function(){ reject(new Error("โหลดไลบรารีไม่สำเร็จ (ตรวจอินเทอร์เน็ต)")); };
+      document.head.appendChild(s);
+    });
+  }
+  function ensureLibs(){
+    var jobs = [];
+    if (!window.html2canvas) jobs.push(loadScript(CFG.html2canvasUrl));
+    if (!(window.jspdf && window.jspdf.jsPDF)) jobs.push(loadScript(CFG.jspdfUrl));
+    return Promise.all(jobs);
+  }
+  function tick(){ return new Promise(function(r){ setTimeout(r, 30); }); }
+
+  function capturePage(el){
+    el.setAttribute("data-pdf-cur", "1");
+    return window.html2canvas(el, {
+      scale: CFG.scale, backgroundColor: "#ffffff", useCORS: true, logging: false,
+      windowWidth: 794, windowHeight: 1123, scrollX: 0, scrollY: 0,
+      onclone: function(doc){
+        /* ในสำเนาที่ใช้วาด: ใช้สไตล์ "ตอนพิมพ์" เหมือนหน้าพิมพ์จริง (ไม่กระทบหน้าจอจริง) */
+        doc.documentElement.classList.remove("ios-print");
+        var styles = doc.querySelectorAll("style");
+        for (var i = 0; i < styles.length; i++){
+          styles[i].textContent = styles[i].textContent.replace(/@media\s+print/g, "@media all");
+        }
+        var areas = doc.querySelectorAll(".print-area");
+        for (var j = 0; j < areas.length; j++){
+          if (!areas[j].hasAttribute("data-pdf-cur")) areas[j].parentNode.removeChild(areas[j]);
+        }
+      }
+    }).then(function(canvas){ el.removeAttribute("data-pdf-cur"); return canvas; },
+            function(err){ el.removeAttribute("data-pdf-cur"); throw err; });
+  }
+
+  async function buildPdfBlob(onProgress){
+    var pages = document.querySelectorAll(".print-area");
+    if (!pages.length) throw new Error("ไม่พบหน้าที่จะสร้าง PDF");
+    await ensureLibs();
+    var jsPDF = window.jspdf.jsPDF;
+    var pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
+    var areaW = A4W - CFG.marginLeft - CFG.marginRight;
+    var areaH = A4H - CFG.marginTop - CFG.marginBottom;
+    var k = areaW / CFG.designWidthMm;            /* ขยายหน้าเล็กน้อยให้เต็มพื้นที่ที่เว้นขอบแล้ว */
+    for (var i = 0; i < pages.length; i++){
+      if (onProgress) onProgress(i + 1, pages.length);
+      await tick();
+      var canvas = await capturePage(pages[i]);
+      var wMm = canvas.width / CFG.scale / PX_PER_MM * k;
+      var hMm = canvas.height / CFG.scale / PX_PER_MM * k;
+      if (hMm > areaH){ var f = areaH / hMm; wMm *= f; hMm *= f; }
+      var x = CFG.marginLeft + (areaW - wMm) / 2;
+      if (i > 0) pdf.addPage();
+      pdf.addImage(canvas.toDataURL("image/jpeg", CFG.quality), "JPEG", x, CFG.marginTop, wMm, hMm, undefined, "FAST");
+      canvas.width = canvas.height = 0;            /* คืนหน่วยความจำ (สำคัญบนมือถือ) */
+    }
+    return { blob: pdf.output("blob"), pages: pages.length };
+  }
+  window.__buildPdfBlob = buildPdfBlob;
+
+  function pdfFileName(){
+    var t = "ปถ.05";
+    try{ if (typeof printDocTitle === "function") t = printDocTitle(); }catch(e){}
+    return String(t).replace(/[\\\/:*?"<>|]+/g, "-") + ".pdf";
+  }
+
+  function overlayEl(){
+    var o = document.getElementById("pdfOverlay");
+    if (!o){
+      o = document.createElement("div");
+      o.id = "pdfOverlay"; o.className = "no-print";
+      o.style.cssText = "position:fixed; inset:0; z-index:99999; background:rgba(255,255,255,.97); display:flex; align-items:center; justify-content:center; padding:24px; font-family:inherit;";
+      document.body.appendChild(o);
+    }
+    return o;
+  }
+  function closeOverlay(){
+    var o = document.getElementById("pdfOverlay");
+    if (o) o.parentNode.removeChild(o);
+  }
+  window.__pdfClose = closeOverlay;
+  function box(html){
+    overlayEl().innerHTML = '<div style="max-width:420px; width:100%; text-align:center; font-size:18px; line-height:1.5; color:#1b3a5c;">' + html + '</div>';
+  }
+  var btnCss = 'display:block; width:100%; margin:10px 0 0; padding:14px 12px; font-size:18px; font-weight:600; border-radius:10px; cursor:pointer; ';
+  var BTN_PRIMARY = btnCss + 'border:1px solid #1b3a5c; background:#1b3a5c; color:#fff;';
+  var BTN_PLAIN = btnCss + 'border:1px solid #1b3a5c; background:#fff; color:#1b3a5c;';
+
+  var lastUrl = null, lastBlob = null, lastName = "";
+  function showDone(pages){
+    var canShare = false;
+    try{
+      canShare = !!(navigator.canShare && navigator.share &&
+        navigator.canShare({ files: [new File([lastBlob], lastName, { type: "application/pdf" })] }));
+    }catch(e){}
+    var mb = (lastBlob.size / 1048576).toFixed(1);
+    box('<div style="font-size:21px; font-weight:700; margin-bottom:6px;">สร้าง PDF เสร็จแล้ว</div>' +
+        '<div style="font-size:15px; color:#555;">' + pages + ' หน้า · ' + mb + ' MB · A4</div>' +
+        '<button style="' + BTN_PRIMARY + '" onclick="window.__pdfOpen()">เปิด PDF (แล้วสั่งพิมพ์/บันทึก)</button>' +
+        (canShare ? '<button style="' + BTN_PLAIN + '" onclick="window.__pdfShare()">แชร์ / บันทึกลงไฟล์</button>' : '') +
+        '<button style="' + BTN_PLAIN + '" onclick="window.__pdfClose()">ปิด</button>');
+  }
+  window.__pdfOpen = function(){
+    if (!lastUrl) return;
+    var w = window.open(lastUrl, "_blank");
+    if (!w){ location.href = lastUrl; }
+  };
+  window.__pdfShare = function(){
+    if (!lastBlob) return;
+    navigator.share({ files: [new File([lastBlob], lastName, { type: "application/pdf" })], title: lastName })
+      .catch(function(){ /* ผู้ใช้ยกเลิก */ });
+  };
+
+  window.exportPdf = async function(){
+    if (document.getElementById("pdfOverlay")) return;
+    box('<div style="font-size:21px; font-weight:700;">กำลังสร้าง PDF…</div>' +
+        '<div id="pdfProg" style="margin-top:10px; font-size:17px;">เตรียมไลบรารี</div>' +
+        '<div style="margin-top:14px; font-size:14px; color:#777;">กรุณารอสักครู่ และอย่าปิดหน้านี้</div>');
+    try{
+      var res = await buildPdfBlob(function(i, n){
+        var p = document.getElementById("pdfProg");
+        if (p) p.textContent = "หน้า " + i + " / " + n;
+      });
+      if (lastUrl){ try{ URL.revokeObjectURL(lastUrl); }catch(e){} }
+      lastBlob = res.blob; lastName = pdfFileName(); lastUrl = URL.createObjectURL(lastBlob);
+      showDone(res.pages);
+    }catch(err){
+      console.error(err);
+      box('<div style="font-size:21px; font-weight:700; color:#B3432E;">สร้าง PDF ไม่สำเร็จ</div>' +
+          '<div style="margin-top:8px; font-size:15px;">' + String((err && err.message) || err).replace(/</g, "&lt;") + '</div>' +
+          '<button style="' + BTN_PLAIN + '" onclick="window.__pdfClose()">ปิด</button>');
+    }
+  };
 })();
 </script>
 </body>
