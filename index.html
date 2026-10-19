@@ -261,15 +261,23 @@
     }
   }
 
-  /* iPhone/iPad (Safari, Chrome, Google บน iOS ใช้เอนจินเดียวกัน): iOS ไม่รับค่าขอบจาก @page
-     จึงเว้นขอบซ้ายสำหรับเข้าเล่มด้วยการดันเนื้อหาในหน้าเอง (ปรับค่าได้ที่ --ios-bind) · คอมและ Android ไม่ถูกแตะ */
+  /* iPhone/iPad (Safari, Chrome, Google บน iOS ใช้เอนจินเดียวกัน): iOS ไม่รับค่าขอบจาก @page และจัดหน้าพิมพ์กว้างกว่ากระดาษ
+     ~1.26 เท่า แล้วย่อลงเหลือ ~79% เสมอ (ตัวเลข "มาตราส่วน 79%" ในหน้าต่างพิมพ์) ทำให้เนื้อหาเล็กและมีขอบกว้างเกินจริง
+     จึงขยายหน้าเอกสาร 1.26 เท่า (zoom) ให้หลังถูกย่อ 79% แล้วได้ขนาดจริงเท่าบนคอม และเว้นขอบซ้ายสำหรับเข้าเล่มเอง
+     ปรับขอบได้ที่ --ios-bind (ซ้ายเพิ่มจากกึ่งกลาง) และ --ios-top (ขอบบน) · คอมและ Android ไม่ถูกแตะ */
   @media print{
-    html.ios-print{ --ios-bind:8mm; }
-    /* ลดความกว้างลง --ios-bind แล้วดันไปทางขวา --ios-bind/2 (หน้ายังอยู่กึ่งกลาง) => ขอบซ้ายเพิ่ม --ios-bind, ขอบขวาเท่าเดิม */
-    html.ios-print .cover-page{ width:calc(186mm - var(--ios-bind)); position:relative; left:calc(var(--ios-bind) / 2); }
+    html.ios-print{ --ios-zoom:1.26; --ios-bind:6mm; --ios-top:6mm; }
+    html.ios-print .cover-page,
     html.ios-print .roster-page,
     html.ios-print .attendance-page,
-    html.ios-print .scores-page{ width:calc(194mm - var(--ios-bind)); left:calc(var(--ios-bind) / 2); }
+    html.ios-print .scores-page{
+      zoom:var(--ios-zoom); position:relative; left:var(--ios-bind);
+      border-top:var(--ios-top) solid transparent;
+    }
+    html.ios-print .cover-page{ min-height:calc(277mm + var(--ios-top)); }
+    html.ios-print .roster-page,
+    html.ios-print .attendance-page,
+    html.ios-print .scores-page{ min-height:calc(285mm + var(--ios-top)); }
   }
 
   @page landscape-page{
@@ -327,28 +335,24 @@
   @media (max-width: 480px){
     .field-grid{ grid-template-columns:1fr; }
   }
-  /* โครงสร้างรายวิชาบนมือถือ/แท็บเล็ตแนวตั้ง: แปลงแต่ละแถวเป็นการ์ด มีป้ายชื่อกำกับทุกช่อง (เฉพาะหน้าจอ ไม่กระทบการพิมพ์/คอม) */
+  /* โครงสร้างรายวิชาบนมือถือ/แท็บเล็ตแนวตั้ง: คงเป็นตาราง กำหนดความกว้างขั้นต่ำให้ทุกคอลัมน์ ไม่ให้ถูกบีบ
+     เลื่อนดูแนวนอนได้ และตรึงคอลัมน์ "ที่" ไว้ทางซ้าย (เฉพาะหน้าจอ ไม่กระทบการพิมพ์/คอม) */
   @media screen and (max-width: 880px){
-    table.struct-table{ max-width:none !important; width:100% !important; border:none !important; }
-    .struct-table thead{ display:none; }
-    .struct-table tbody, .struct-table tfoot, .struct-table tr, .struct-table td{ display:block; box-sizing:border-box; width:auto !important; }
-    .struct-table tbody tr{ border:1px solid var(--line); border-radius:10px; margin:0 0 12px; padding:8px 12px 10px; }
-    .struct-table tbody td{ border:none !important; padding:5px 0 !important; text-align:left !important; }
-    .struct-table tbody td:first-child{ font-weight:700; color:var(--ink); font-size:17px; padding-bottom:6px !important; }
-    .struct-table tbody td:first-child::before{ content:"รายการที่ "; }
-    .struct-table tbody td[data-label]{ display:flex; align-items:center; gap:10px; }
-    .struct-table tbody td[data-label]::before{ content:attr(data-label); flex:0 0 40%; font-size:14.5px; font-weight:600; color:var(--ink); line-height:1.25; }
-    .struct-table tbody td[data-exam]{ background:var(--exam-tint) !important; border-radius:8px; padding:6px 8px !important; }
-    .struct-table tbody td input, .struct-table tbody td select{ flex:1 1 auto; width:100% !important; min-width:0; box-sizing:border-box; padding:8px 10px !important; font-size:16px !important; text-align:left; }
-    .struct-table tbody td > div{ width:100%; }
-    .struct-table tbody td > div > span{ flex:0 0 40%; font-size:14.5px; }
-    .struct-table tbody td input{ border:1px solid var(--line) !important; border-radius:6px; background:#fff; }
-    .struct-table tbody td[data-actions]{ display:flex; justify-content:flex-end; gap:6px; padding-top:8px !important; }
-    .struct-table tfoot tr{ display:flex; flex-wrap:wrap; gap:4px 16px; border:1px solid var(--line); border-radius:10px; padding:8px 12px; background:#EEEEEE; }
-    .struct-table tfoot td{ border:none !important; padding:2px 0 !important; text-align:left !important; font-size:15px; }
-    .struct-table tfoot td:first-child{ flex:0 0 100%; }
-    .struct-table tfoot td[data-label]::before{ content:attr(data-label) ": "; font-weight:600; }
-    .struct-table tfoot td:empty{ display:none; }
+    .table-scroll{ -webkit-overflow-scrolling:touch; }
+    table.struct-table{ width:max-content !important; min-width:100%; max-width:none !important; }
+    .struct-table thead th:nth-child(1), .struct-table tbody td:nth-child(1){ min-width:44px; }
+    .struct-table thead th:nth-child(2), .struct-table tbody td:nth-child(2){ min-width:170px; }
+    .struct-table thead th:nth-child(3), .struct-table tbody td:nth-child(3){ min-width:220px; }
+    .struct-table thead th:nth-child(4), .struct-table tbody td:nth-child(4){ min-width:150px; }
+    .struct-table thead th:nth-child(5), .struct-table tbody td:nth-child(5){ min-width:100px; }
+    .struct-table thead th:nth-child(6), .struct-table tbody td:nth-child(6),
+    .struct-table thead th:nth-child(7), .struct-table tbody td:nth-child(7){ min-width:115px; }
+    .struct-table thead th:nth-child(8), .struct-table tbody td:nth-child(8){ min-width:120px; }
+    .struct-table tbody td input, .struct-table tbody td select{ min-width:0; }
+    /* ตรึงคอลัมน์ "ที่" */
+    .struct-table thead th:first-child, .struct-table tbody td:first-child{ position:sticky; left:0; z-index:2; }
+    .struct-table tbody td:first-child{ background:var(--collect-tint, #fff); box-shadow:1px 0 0 var(--line); }
+    .struct-table thead th:first-child{ z-index:3; box-shadow:1px 0 0 var(--line); }
   }
 .fill-handle{ position:fixed; width:9px; height:9px; background:#2F6FED; border:1.5px solid #fff; box-shadow:0 0 0 1px #2F6FED; cursor:crosshair; z-index:9999; display:none; }
 .fill-cell-active{ box-shadow: inset 0 0 0 1.5px #2F6FED !important; }
