@@ -376,6 +376,53 @@
     .struct-table tbody td:first-child{ background:var(--collect-tint, #fff); box-shadow:1px 0 0 var(--line); }
     .struct-table thead th:first-child{ z-index:3; box-shadow:1px 0 0 var(--line); }
   }
+  /* ===== หน้าโครงสร้างรายวิชา (จอคอม): ตารางเต็มความกว้างพอดีจอ + จัดกลุ่มปุ่มให้เป็นระเบียบ ===== */
+  .sa-groups{ display:block; }
+  .sa-group + .sa-group{ margin-top:14px; }
+  @media screen and (min-width: 881px){
+    .struct-split-box{ max-width:none !important; }
+    .struct-actions{ max-width:none; }
+    .sa-groups{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px; align-items:stretch; }
+    .sa-group + .sa-group{ margin-top:0; }
+    .sa-group{ display:flex; flex-direction:column; padding:12px 14px; background:#FAF8F3; border:1px solid var(--line); border-radius:8px; }
+    .sa-group-danger{ background:#FDF6F4; border-color:#EBCFC8; }
+    .sa-group .sa-grid{ grid-template-columns:1fr; gap:8px; }
+    .sa-group .btn-outline{ justify-content:flex-start; background:#fff; }
+    .sa-undo:empty{ display:none; }
+    .sa-undo{ margin-top:12px; }
+
+    table.struct-table{ width:100% !important; max-width:none !important; min-width:860px; table-layout:fixed; }
+    .struct-table thead th:nth-child(1){ width:46px !important; }
+    .struct-table thead th:nth-child(2){ width:17% !important; }
+    .struct-table thead th:nth-child(3){ width:auto !important; }
+    .struct-table thead th:nth-child(4){ width:132px !important; }
+    .struct-table thead th:nth-child(5){ width:96px !important; }
+    .struct-table thead th:nth-child(6), .struct-table thead th:nth-child(7){ width:108px !important; }
+    .struct-table thead th:nth-child(8){ width:116px !important; }
+    .struct-table th{ line-height:1.3; }
+    .struct-table tbody td{ vertical-align:middle; }
+    /* ช่องกรอกในตาราง: ยืดตามความกว้างคอลัมน์ ไม่ล้นช่อง */
+    .struct-table tbody td:nth-child(2) input{ width:auto !important; flex:1 1 auto; min-width:0; }
+    .struct-table tbody td:nth-child(3) input{ width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:4px; padding:4px 8px; text-align:left; background:#fff; }
+    .struct-table tbody td:nth-child(5) input,
+    .struct-table tbody td:nth-child(6) input,
+    .struct-table tbody td:nth-child(7) input{ width:100% !important; max-width:84px; box-sizing:border-box; background:#fff; }
+    .struct-table tbody td:nth-child(8){ padding:3px 4px; }
+    .struct-table tfoot td{ padding:6px 6px; }
+  }
+  /* จอคอมแคบ (หน้าต่างเล็ก/แท็บเล็ตแนวนอน): บีบคอลัมน์ให้ตารางยังพอดีจอ */
+  @media screen and (min-width: 881px) and (max-width: 1199px){
+    table.struct-table{ min-width:740px; }
+    .struct-table thead th:nth-child(1){ width:40px !important; }
+    .struct-table thead th:nth-child(2){ width:14% !important; }
+    .struct-table thead th:nth-child(4){ width:118px !important; }
+    .struct-table thead th:nth-child(5){ width:84px !important; }
+    .struct-table thead th:nth-child(6), .struct-table thead th:nth-child(7){ width:92px !important; }
+    .struct-table thead th:nth-child(8){ width:100px !important; }
+    .struct-table th{ font-size:13px; padding:6px 3px; }
+    .struct-table td{ padding-left:4px; padding-right:4px; }
+    .struct-table tbody td:nth-child(2) span{ font-size:13px; }
+  }
   /* รายชื่อนักเรียนบนมือถือ/แท็บเล็ตแนวตั้ง: ขยายคอลัมน์ชื่อให้อ่านได้ เลื่อนดูแนวนอนได้ และตรึงคอลัมน์ "เลขที่" ไว้ทางซ้าย */
   @media screen and (max-width: 880px){
     table.roster-table{ width:max-content !important; min-width:100%; max-width:none !important; }
@@ -5652,7 +5699,7 @@ function renderStructure(s, comp){
   var sumFin    = sumField(function(it){ return examNumPos(it.finMax); });
 
   var examSplitBox =
-    '<div style="margin:12px 0 14px; padding:12px 16px; background:white; border:1px solid var(--line); border-radius:8px; max-width:960px;">' +
+    '<div class="struct-split-box" style="margin:12px 0 14px; padding:12px 16px; background:white; border:1px solid var(--line); border-radius:8px; max-width:960px;">' +
       '<div style="font-size:15px; font-weight:600; color:var(--ink); margin-bottom:8px;">รูปแบบช่องกรอกคะแนนสอบ (กลางภาค / ปลายภาค)</div>' +
       '<label style="display:flex; align-items:flex-start; gap:8px; margin-bottom:6px; cursor:pointer; font-size:15px;">' +
         '<input type="radio" name="examSplitOpt" value="each" '+(examSplit==="each"?"checked":"")+' onchange="setExamSplit(\'each\')" style="margin-top:4px;"/>' +
@@ -5711,22 +5758,30 @@ function renderStructure(s, comp){
     '<td data-label="รวมสอบกลางภาค" style="text-align:center;">'+sumMid+'</td><td data-label="รวมสอบปลายภาค" style="text-align:center;">'+sumFin+'</td><td></td></tr></tfoot>' +
   '</table></div>' +
   '<div class="struct-actions">' +
-    '<div class="sa-title">เพิ่มรายการ</div>' +
-    '<div class="sa-grid">' +
-      '<button class="btn-outline" onclick="addStructureItem(\'collect\',\'before\')">'+icon("plus",15)+' เพิ่มตัวชี้วัด (ก่อนกลางภาค)</button>' +
-      '<button class="btn-outline" onclick="addStructureItem(\'collect\',\'after\')">'+icon("plus",15)+' เพิ่มตัวชี้วัด (หลังกลางภาค)</button>' +
+    '<div class="sa-groups">' +
+      '<div class="sa-group">' +
+        '<div class="sa-title">เพิ่มรายการ</div>' +
+        '<div class="sa-grid">' +
+          '<button class="btn-outline" onclick="addStructureItem(\'collect\',\'before\')">'+icon("plus",15)+' เพิ่มตัวชี้วัด (ก่อนกลางภาค)</button>' +
+          '<button class="btn-outline" onclick="addStructureItem(\'collect\',\'after\')">'+icon("plus",15)+' เพิ่มตัวชี้วัด (หลังกลางภาค)</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="sa-group">' +
+        '<div class="sa-title">เพิ่มหลายรายการ</div>' +
+        '<div class="sa-grid">' +
+          '<button class="btn-outline" onclick="addMultipleStructureItems(\'before\')">'+icon("plus",15)+' เพิ่มหลายตัวชี้วัด (ก่อนกลางภาค)</button>' +
+          '<button class="btn-outline" onclick="addMultipleStructureItems(\'after\')">'+icon("plus",15)+' เพิ่มหลายตัวชี้วัด (หลังกลางภาค)</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="sa-group">' +
+        '<div class="sa-title">นำเข้าจาก Excel / ลบ</div>' +
+        '<div class="sa-grid">' +
+          '<button class="btn-outline" onclick="openStructPasteImport()">'+icon("upload",15)+' วางโครงสร้างจาก Excel</button>' +
+          '<button class="btn-outline" style="border-color:#B3432E; color:#B3432E;" onclick="deleteAllStructureItems()">'+icon("trash",15,"#B3432E")+' ลบรายการโครงสร้างทั้งหมด</button>' +
+        '</div>' +
+      '</div>' +
     '</div>' +
-    '<div class="sa-title" style="margin-top:14px;">เพิ่มหลายรายการ / นำเข้าจาก Excel</div>' +
-    '<div class="sa-grid">' +
-      '<button class="btn-outline" onclick="addMultipleStructureItems(\'before\')">'+icon("plus",15)+' เพิ่มหลายตัวชี้วัด (ก่อนกลางภาค)</button>' +
-      '<button class="btn-outline" onclick="addMultipleStructureItems(\'after\')">'+icon("plus",15)+' เพิ่มหลายตัวชี้วัด (หลังกลางภาค)</button>' +
-      '<button class="btn-outline" onclick="openStructPasteImport()">'+icon("upload",15)+' วางโครงสร้างจาก Excel</button>' +
-    '</div>' +
-    '<div class="sa-title" style="margin-top:14px;">ลบรายการ</div>' +
-    '<div class="sa-grid">' +
-      '<button class="btn-outline" style="border-color:#B3432E; color:#B3432E;" onclick="deleteAllStructureItems()">'+icon("trash",15,"#B3432E")+' ลบรายการโครงสร้างทั้งหมด</button>' +
-    '</div>' +
-    renderStructPasteUndoInline() +
+    '<div class="sa-undo">'+renderStructPasteUndoInline()+'</div>' +
   '</div>' +
   structPasteImportBlock(s) +
   '<div style="margin-top:18px; display:inline-block; background:white; border:1px solid var(--line); border-radius:8px; padding:12px 18px; font-size:15px; font-weight:600; color:'+totalColor+';">' +
