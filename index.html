@@ -261,6 +261,17 @@
     }
   }
 
+  /* iPhone/iPad (Safari, Chrome, Google บน iOS ใช้เอนจินเดียวกัน): iOS ไม่รับค่าขอบจาก @page
+     จึงเว้นขอบซ้ายสำหรับเข้าเล่มด้วยการดันเนื้อหาในหน้าเอง (ปรับค่าได้ที่ --ios-bind) · คอมและ Android ไม่ถูกแตะ */
+  @media print{
+    html.ios-print{ --ios-bind:8mm; }
+    /* ลดความกว้างลง --ios-bind แล้วดันไปทางขวา --ios-bind/2 (หน้ายังอยู่กึ่งกลาง) => ขอบซ้ายเพิ่ม --ios-bind, ขอบขวาเท่าเดิม */
+    html.ios-print .cover-page{ width:calc(186mm - var(--ios-bind)); position:relative; left:calc(var(--ios-bind) / 2); }
+    html.ios-print .roster-page,
+    html.ios-print .attendance-page,
+    html.ios-print .scores-page{ width:calc(194mm - var(--ios-bind)); left:calc(var(--ios-bind) / 2); }
+  }
+
   @page landscape-page{
     size: A4 landscape;
     margin: 8mm 10mm;
@@ -315,6 +326,29 @@
   }
   @media (max-width: 480px){
     .field-grid{ grid-template-columns:1fr; }
+  }
+  /* โครงสร้างรายวิชาบนมือถือ/แท็บเล็ตแนวตั้ง: แปลงแต่ละแถวเป็นการ์ด มีป้ายชื่อกำกับทุกช่อง (เฉพาะหน้าจอ ไม่กระทบการพิมพ์/คอม) */
+  @media screen and (max-width: 880px){
+    table.struct-table{ max-width:none !important; width:100% !important; border:none !important; }
+    .struct-table thead{ display:none; }
+    .struct-table tbody, .struct-table tfoot, .struct-table tr, .struct-table td{ display:block; box-sizing:border-box; width:auto !important; }
+    .struct-table tbody tr{ border:1px solid var(--line); border-radius:10px; margin:0 0 12px; padding:8px 12px 10px; }
+    .struct-table tbody td{ border:none !important; padding:5px 0 !important; text-align:left !important; }
+    .struct-table tbody td:first-child{ font-weight:700; color:var(--ink); font-size:17px; padding-bottom:6px !important; }
+    .struct-table tbody td:first-child::before{ content:"รายการที่ "; }
+    .struct-table tbody td[data-label]{ display:flex; align-items:center; gap:10px; }
+    .struct-table tbody td[data-label]::before{ content:attr(data-label); flex:0 0 40%; font-size:14.5px; font-weight:600; color:var(--ink); line-height:1.25; }
+    .struct-table tbody td[data-exam]{ background:var(--exam-tint) !important; border-radius:8px; padding:6px 8px !important; }
+    .struct-table tbody td input, .struct-table tbody td select{ flex:1 1 auto; width:100% !important; min-width:0; box-sizing:border-box; padding:8px 10px !important; font-size:16px !important; text-align:left; }
+    .struct-table tbody td > div{ width:100%; }
+    .struct-table tbody td > div > span{ flex:0 0 40%; font-size:14.5px; }
+    .struct-table tbody td input{ border:1px solid var(--line) !important; border-radius:6px; background:#fff; }
+    .struct-table tbody td[data-actions]{ display:flex; justify-content:flex-end; gap:6px; padding-top:8px !important; }
+    .struct-table tfoot tr{ display:flex; flex-wrap:wrap; gap:4px 16px; border:1px solid var(--line); border-radius:10px; padding:8px 12px; background:#EEEEEE; }
+    .struct-table tfoot td{ border:none !important; padding:2px 0 !important; text-align:left !important; font-size:15px; }
+    .struct-table tfoot td:first-child{ flex:0 0 100%; }
+    .struct-table tfoot td[data-label]::before{ content:attr(data-label) ": "; font-weight:600; }
+    .struct-table tfoot td:empty{ display:none; }
   }
 .fill-handle{ position:fixed; width:9px; height:9px; background:#2F6FED; border:1.5px solid #fff; box-shadow:0 0 0 1px #2F6FED; cursor:crosshair; z-index:9999; display:none; }
 .fill-cell-active{ box-shadow: inset 0 0 0 1.5px #2F6FED !important; }
@@ -374,6 +408,17 @@ button:focus-visible{ outline:2px solid var(--ring); outline-offset:2px; }
 }
 
 </style>
+<script>
+/* ตรวจ iPhone/iPad (รวม iPadOS ที่แสดงตัวเป็น Mac) เพื่อเปิดโหมดเว้นขอบเข้าเล่มสำหรับการพิมพ์บน iOS */
+(function(){
+  try{
+    var ua = navigator.userAgent || "";
+    var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (isIOS) document.documentElement.classList.add("ios-print");
+  }catch(e){}
+})();
+</script>
+
 </head>
 <body>
 <div id="root"></div>
@@ -5490,12 +5535,12 @@ function renderStructure(s, comp){
     return '<tr style="background:var(--collect-tint);">' +
       '<td style="text-align:center;">'+(i+1)+'</td>' +
       '<td>'+itemCell+'</td>' +
-      '<td>'+nameCell+'</td>' +
-      '<td style="text-align:center; padding:3px 4px;">'+periodCell+'</td>' +
-      '<td style="text-align:center; padding:3px 4px;"><input id="f_stmax_'+it.id+'" data-srow="'+i+'" data-scol="3" onkeydown="handleGridInputKeydown(event)" type="text" inputmode="decimal" value="'+esc(it.max)+'" style="width:70px; '+inpStyle+'" oninput="updateStructureItem(\''+it.id+'\',\'max\',this.value)"/></td>' +
-      '<td style="text-align:center; padding:3px 4px; background:var(--exam-tint);">'+examInput("midMax", 4)+'</td>' +
-      '<td style="text-align:center; padding:3px 4px; background:var(--exam-tint);">'+examInput("finMax", 5)+'</td>' +
-      '<td style="text-align:center; white-space:nowrap;">' +
+      '<td data-label="ชื่อรายการ">'+nameCell+'</td>' +
+      '<td data-label="ช่วงเวลา" style="text-align:center; padding:3px 4px;">'+periodCell+'</td>' +
+      '<td data-label="คะแนนเก็บเต็ม" style="text-align:center; padding:3px 4px;"><input id="f_stmax_'+it.id+'" data-srow="'+i+'" data-scol="3" onkeydown="handleGridInputKeydown(event)" type="text" inputmode="decimal" value="'+esc(it.max)+'" style="width:70px; '+inpStyle+'" oninput="updateStructureItem(\''+it.id+'\',\'max\',this.value)"/></td>' +
+      '<td data-label="คะแนนสอบกลางภาค (เต็ม)" data-exam="1" style="text-align:center; padding:3px 4px; background:var(--exam-tint);">'+examInput("midMax", 4)+'</td>' +
+      '<td data-label="คะแนนสอบปลายภาค (เต็ม)" data-exam="1" style="text-align:center; padding:3px 4px; background:var(--exam-tint);">'+examInput("finMax", 5)+'</td>' +
+      '<td data-actions="1" style="text-align:center; white-space:nowrap;">' +
         '<button class="icon-btn" title="แทรกตัวชี้วัดใหม่ ด้านบนแถวนี้" onclick="insertStructureItem(\''+it.id+'\',\'above\')" style="font-size:12px; font-weight:700; color:var(--ink);">+↑</button>' +
         '<button class="icon-btn" title="แทรกตัวชี้วัดใหม่ ด้านล่างแถวนี้" onclick="insertStructureItem(\''+it.id+'\',\'below\')" style="font-size:12px; font-weight:700; color:var(--ink);">+↓</button>' +
         '<button class="icon-btn" title="ลบรายการ" onclick="removeStructureItem(\''+it.id+'\')">'+icon("trash",15,"#B3432E")+'</button>' +
@@ -5561,13 +5606,13 @@ function renderStructure(s, comp){
   '<div style="font-size:15px; font-weight:600; color:var(--ink); margin-bottom:8px;">อัตราส่วนคะแนนรายวิชานี้ = '+midpathTotal+':'+finalpathTotal+'</div>' +
   '<div class="section-sub">กำหนดตัวชี้วัดของวิชานี้ — กรอกเลขท้ายตัวชี้วัด (เช่น 1, 2.1) ชื่อ/รายละเอียด ช่วงเวลา (ก่อน/หลังกลางภาค) และคะแนนเต็มของคะแนนเก็บ · ต่อท้ายตัวชี้วัดมีช่อง <b>คะแนนสอบกลางภาค</b> และ <b>คะแนนสอบปลายภาค</b> ให้กรอก <b>ถ้าตัวชี้วัดข้อไหนไม่มีสอบ ให้เว้นช่องนั้นไว้ว่าง</b> · ผลรวมทุกช่องต้องครบ 100 · เลือกด้านล่างได้ว่าคะแนนสอบจะแยกช่องตามตัวชี้วัด หรือรวมเป็นช่องเดียว</div>' +
   examSplitBox +
-  '<div class="table-scroll"><table class="ptable" style="max-width:960px;"><thead><tr>' +
+  '<div class="table-scroll"><table class="ptable struct-table" style="max-width:960px;"><thead><tr>' +
     '<th style="width:40px;">ที่</th><th style="width:120px;">ตัวชี้วัด</th><th style="width:260px;">ชื่อรายการ</th><th style="width:140px;">ช่วงเวลา</th><th style="width:100px;">คะแนนเก็บ<br/>เต็ม</th><th style="width:110px; background:var(--exam-tint);">คะแนนสอบ<br/>กลางภาค</th><th style="width:110px; background:var(--exam-tint);">คะแนนสอบ<br/>ปลายภาค</th><th style="width:110px;">แทรก / ลบ</th>' +
   '</tr></thead><tbody>'+rows+'</tbody>' +
   '<tfoot><tr style="background:#EEEEEE; font-weight:600;"><td colspan="3" style="text-align:right; padding:6px 10px;">รวมแต่ละช่อง</td>' +
     '<td style="text-align:center; font-size:12px; font-weight:400;">ก่อน '+sumBefore+' · หลัง '+sumAfter+'</td>' +
-    '<td style="text-align:center;">'+examRound2(sumBefore+sumAfter)+'</td>' +
-    '<td style="text-align:center;">'+sumMid+'</td><td style="text-align:center;">'+sumFin+'</td><td></td></tr></tfoot>' +
+    '<td data-label="รวมคะแนนเก็บ" style="text-align:center;">'+examRound2(sumBefore+sumAfter)+'</td>' +
+    '<td data-label="รวมสอบกลางภาค" style="text-align:center;">'+sumMid+'</td><td data-label="รวมสอบปลายภาค" style="text-align:center;">'+sumFin+'</td><td></td></tr></tfoot>' +
   '</table></div>' +
   '<div class="struct-actions">' +
     '<div class="sa-title">เพิ่มรายการ</div>' +
