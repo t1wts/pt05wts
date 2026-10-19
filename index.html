@@ -376,6 +376,18 @@
     .struct-table tbody td:first-child{ background:var(--collect-tint, #fff); box-shadow:1px 0 0 var(--line); }
     .struct-table thead th:first-child{ z-index:3; box-shadow:1px 0 0 var(--line); }
   }
+  /* รายชื่อนักเรียนบนมือถือ/แท็บเล็ตแนวตั้ง: ขยายคอลัมน์ชื่อให้อ่านได้ เลื่อนดูแนวนอนได้ และตรึงคอลัมน์ "เลขที่" ไว้ทางซ้าย */
+  @media screen and (max-width: 880px){
+    table.roster-table{ width:max-content !important; min-width:100%; max-width:none !important; }
+    .roster-table thead th:nth-child(1), .roster-table tbody td:nth-child(1){ min-width:44px; }
+    .roster-table thead th:nth-child(2), .roster-table tbody td:nth-child(2){ min-width:105px; }
+    .roster-table thead th:nth-child(3), .roster-table tbody td:nth-child(3){ min-width:230px; }
+    .roster-table thead th:nth-child(4), .roster-table tbody td:nth-child(4){ min-width:84px; }
+    .roster-table tbody td input{ min-width:0; width:100%; }
+    .roster-table thead th:first-child, .roster-table tbody td:first-child{ position:sticky; left:0; z-index:2; }
+    .roster-table tbody td:first-child{ background:#fff; box-shadow:1px 0 0 var(--line); }
+    .roster-table thead th:first-child{ z-index:3; box-shadow:1px 0 0 var(--line); }
+  }
 .fill-handle{ position:fixed; width:9px; height:9px; background:#2F6FED; border:1.5px solid #fff; box-shadow:0 0 0 1px #2F6FED; cursor:crosshair; z-index:9999; display:none; }
 .fill-cell-active{ box-shadow: inset 0 0 0 1.5px #2F6FED !important; }
 .fill-cell-sel{ background:#EAF1FF !important; box-shadow: inset 0 0 0 1px #9DB9F5 !important; }
@@ -4368,10 +4380,10 @@ function renderCover(s, comp){
       '</div>' +
     '</div>' +
 
-    '<div class="cover-preview-col" style="flex:1 1 320px; min-width:280px; display:flex; justify-content:center; align-items:flex-start; overflow-x:auto;">' +
-      /* ขนาดตัวอย่าง: ปรับตัวเลข scale ได้ (0.85 = 85% ของหน้าจริง) ความกว้าง/สูงกล่อง = 703×scale / 1052×scale */
-      '<div style="width:598px; height:894px; flex-shrink:0; overflow:hidden; box-shadow:0 2px 12px rgba(0,0,0,0.18); background:white; position:relative;">' +
-        '<div class="cover-page" style="position:absolute; top:0; left:0; padding:0 46px 10px; line-height:1.1; color:#111; text-align:center; transform:scale(0.85); transform-origin:top left;">' +
+    '<div class="cover-preview-col" style="flex:1 1 320px; min-width:0; display:flex; justify-content:center; align-items:flex-start; overflow-x:auto;">' +
+      /* ขนาดตัวอย่าง: คอม = 0.55 · มือถือ = คำนวณให้พอดีความกว้างจอ (fitCoverPreview) · (เดิม 0.85 = 85% ของหน้าจริง) ความกว้าง/สูงกล่อง = 703×scale / 1052×scale */
+      '<div style="width:calc(703px * var(--cs,0.55)); height:calc(1052px * var(--cs,0.55)); flex-shrink:0; overflow:hidden; box-shadow:0 2px 12px rgba(0,0,0,0.18); background:white; position:relative;">' +
+        '<div class="cover-page" style="position:absolute; top:0; left:0; padding:0 46px 10px; line-height:1.1; color:#111; text-align:center; transform:scale(var(--cs,0.55)); transform-origin:top left;">' +
           /* เลื่อน "ปถ.05: บ" ลง 1 บรรทัดเฉพาะในตัวอย่างนี้ (ตอนพิมพ์ใช้ฟังก์ชันเดิม ไม่เปลี่ยน) */
           renderCoverPageInner(s, comp, info).replace('font-weight:600; margin-bottom:4px;">ปถ.05: บ', 'font-weight:600; margin-top:1.1em; margin-bottom:4px;">ปถ.05: บ') +
         '</div>' +
@@ -4533,7 +4545,7 @@ function renderRoster(s){
   return '' +
   '<div class="section-title">รายชื่อนักเรียน</div>' +
   '<div class="section-sub">ต้นทางข้อมูลเดียว ทุกหน้าถัดไปของวิชานี้อ้างอิงจากรายชื่อนี้อัตโนมัติ</div>' +
-  '<div class="table-scroll"><table class="ptable"><thead><tr>' +
+  '<div class="table-scroll"><table class="ptable roster-table"><thead><tr>' +
     '<th style="width:50px;">เลขที่</th><th style="width:130px;">เลขประจำตัว</th><th>ชื่อ - นามสกุล</th><th style="width:80px;"></th>' +
   '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
   '<div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap;">' +
@@ -7124,6 +7136,29 @@ function fitSidebar(){
   window.addEventListener("load", fitSidebar);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitSidebar);
   fitSidebar();
+})();
+function fitCoverPreview(){
+  /* ปรับขนาดตัวอย่างหน้าปกอัตโนมัติให้พอดีหน้าจอ: คอม = พอดีทั้งความกว้างช่องและความสูงจอ (ไม่ต้องเลื่อน) · มือถือ = พอดีความกว้างจอ */
+  var col = document.querySelector(".cover-preview-col");
+  if (!col) return;
+  var availW = (col.clientWidth || (window.innerWidth - 32)) - 4;
+  var cs = availW / 703;
+  if (window.innerWidth > 880){
+    var availH = window.innerHeight - 28;   /* เว้นขอบบน-ล่าง */
+    cs = Math.min(cs, availH / 1052, 0.9);
+  } else {
+    cs = Math.min(cs, 0.7);
+  }
+  cs = Math.max(0.3, cs);
+  col.style.setProperty("--cs", cs.toFixed(4));
+}
+(function(){
+  var prevRerender = rerender;
+  rerender = function(){ var r = prevRerender.apply(this, arguments); fitSidebar(); fitCoverPreview(); return r; };
+  window.addEventListener("resize", function(){ fitSidebar(); fitCoverPreview(); });
+  window.addEventListener("load", fitCoverPreview);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitCoverPreview);
+  fitCoverPreview();
 })();
 </script>
 
