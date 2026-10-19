@@ -392,6 +392,37 @@
   @media screen and (max-width: 880px) and (orientation: portrait){
     th[style*="left:40px"], td[style*="left:40px"]{ position:static !important; box-shadow:none !important; }
   }
+  /* ตารางสร้างเวลาเรียน (หน้าเวลาเรียน): คอม = ขยายเต็มความกว้าง เน้นให้คอลัมน์หมายเหตุวันหยุดกว้างที่สุด */
+  @media screen and (min-width: 881px){
+    table.session-table{ width:100% !important; max-width:none !important; table-layout:fixed; }
+  }
+  /* โทรศัพท์: ตรึงคอลัมน์ ที่ / เดือน / วันที่ / วัน ไว้ทางซ้าย ส่วนที่เหลือเลื่อนดูแนวนอน */
+  @media screen and (max-width: 880px){
+    table.session-table{ width:max-content !important; min-width:100%; max-width:none !important; table-layout:auto; }
+    .session-table th, .session-table td{ box-sizing:border-box; }
+    .session-table thead th:nth-child(-n+4), .session-table tbody td:nth-child(-n+4){ position:sticky; z-index:2; padding-left:3px; padding-right:3px; }
+    .session-table tbody td:nth-child(-n+4){ background:#fff; }
+    .session-table tr.sess-holiday td:nth-child(-n+4){ background:var(--holiday-bg); }
+    .session-table thead th:nth-child(-n+4){ z-index:3; }
+    .session-table th:nth-child(1), .session-table td:nth-child(1){ width:34px; min-width:34px; max-width:34px; left:0; }
+    .session-table th:nth-child(2), .session-table td:nth-child(2){ width:96px; min-width:96px; max-width:96px; left:34px; }
+    .session-table th:nth-child(3), .session-table td:nth-child(3){ width:58px; min-width:58px; max-width:58px; left:130px; }
+    .session-table th:nth-child(4), .session-table td:nth-child(4){ width:70px; min-width:70px; max-width:70px; left:188px; box-shadow:2px 0 4px rgba(0,0,0,0.12); }
+    .session-table td:nth-child(2) select, .session-table td:nth-child(4) select{ font-size:14px !important; padding:0; }
+    .session-table td:nth-child(3) input{ width:100% !important; }
+    .session-table th:nth-child(5), .session-table td:nth-child(5){ min-width:56px; }
+    .session-table th:nth-child(6), .session-table td:nth-child(6){ min-width:72px; }
+    .session-table th:nth-child(7), .session-table td:nth-child(7){ min-width:220px; }
+    .session-table th:nth-child(8), .session-table td:nth-child(8){ min-width:70px; }
+  }
+  /* หน้าคุณลักษณะฯ บนโทรศัพท์: ตารางกว้างเลื่อนแนวนอนได้ และตรึงคอลัมน์ "เลขที่" ไว้ทางซ้าย */
+  @media screen and (max-width: 880px){
+    table.desirable-table{ table-layout:auto !important; width:max-content !important; min-width:100%; }
+    .desirable-table thead th:first-child, .desirable-table tbody td:first-child{ position:sticky; left:0; z-index:2; }
+    .desirable-table tbody td:first-child{ background:#fff; box-shadow:2px 0 4px rgba(0,0,0,0.12); }
+    .desirable-table thead th:first-child{ z-index:3; box-shadow:2px 0 4px rgba(0,0,0,0.12); }
+    .desirable-table th:nth-child(2), .desirable-table td:nth-child(2){ min-width:130px; }
+  }
 .fill-handle{ position:fixed; width:9px; height:9px; background:#2F6FED; border:1.5px solid #fff; box-shadow:0 0 0 1px #2F6FED; cursor:crosshair; z-index:9999; display:none; }
 .fill-cell-active{ box-shadow: inset 0 0 0 1.5px #2F6FED !important; }
 .fill-cell-sel{ background:#EAF1FF !important; box-shadow: inset 0 0 0 1px #9DB9F5 !important; }
@@ -4573,7 +4604,7 @@ function renderAttendance(s, comp){
   var totalHoursRecorded = comp.totalHoursRecorded;
 
   var sessionRows = s.sessions.map(function(sess, i){
-    var rowStyle = sess.holiday ? ' style="background:var(--holiday-bg);"' : "";
+    var rowStyle = sess.holiday ? ' class="sess-holiday" style="background:var(--holiday-bg);"' : "";
     return '<tr'+rowStyle+'>' +
       '<td style="text-align:center;">'+(i+1)+'</td>' +
       '<td><select id="f_month_'+sess.id+'" data-srow="'+i+'" data-scol="0" onkeydown="handleGridInputKeydown(event)" style="width:100%; border:none; background:transparent; font-size:15px;" onchange="updateSession(\''+sess.id+'\',\'month\',this.value)">' +
@@ -4676,7 +4707,7 @@ function renderAttendance(s, comp){
       '<label style="display:flex; align-items:center; gap:6px; margin-bottom:10px; font-size:14px; color:#B3432E; cursor:pointer;"><input type="checkbox" id="genReplace"/> แทนที่วันเรียนเดิม — ลบวันเรียนทั้งหมดที่มีอยู่ (รวมข้อมูลการมาเรียนที่บันทึกไว้) ก่อนสร้างตามเงื่อนไขนี้ · ไม่ติ๊ก = เพิ่มเฉพาะวันที่ยังไม่มีในตาราง</label>' +
       '<button class="btn-outline" onclick="generateWeeklySessions()">'+icon("plus",15)+' สร้างวันเรียนตามเงื่อนไขนี้</button>' +
     '</div>' +
-    '<div class="table-scroll"><table class="ptable" style="max-width:680px;"><thead><tr>' +
+    '<div class="table-scroll"><table class="ptable session-table"><thead><tr>' +
       '<th style="width:40px;">ที่</th><th style="width:150px;">เดือน</th><th style="width:80px;">วันที่</th><th style="width:90px;">วัน</th><th style="width:60px;">ชั่วโมง</th><th style="width:90px;">วันหยุด</th><th>หมายเหตุ</th><th style="width:64px;"></th>' +
     '</tr></thead><tbody>'+sessionRows+'</tbody></table></div>' +
   '</div>' +
@@ -5491,7 +5522,7 @@ function renderDesirable(s, comp){
   return '' +
   '<div class="section-title">คุณลักษณะอันพึงประสงค์</div>' +
   '<div class="section-sub">ประเมิน 8 ข้อ ข้อละเต็ม 3 คะแนน ตามเกณฑ์ 3 = ดีเยี่ยม, 2 = ดี, 1 = ผ่าน, 0 = ไม่ผ่าน ระบบคำนวณค่าเฉลี่ย (เต็ม 3) และระดับคุณภาพรวมให้อัตโนมัติ — แก้ไขชื่อหัวข้อได้ที่ช่องด้านบนของแต่ละคอลัมน์ · พิมพ์เลข 0-3 ในช่องคะแนนแล้วระบบเลื่อนไปช่องถัดไปให้อัตโนมัติ (กด Enter ก็ได้) · ปุ่ม 0/1/2/3 ใต้ชื่อหัวข้อใช้ตั้งคะแนนนั้นให้ทุกคนในคอลัมน์เดียวได้ทันที · ตารางนี้จัดให้พอดีหน้าจอโดยไม่ต้องเลื่อนซ้าย-ขวา · นักเรียนสถานะ ย้าย/มส จะถูกล็อกไม่ให้กรอกคะแนนโดยอัตโนมัติ</div>' +
-  '<div class="table-scroll"><table class="ptable" style="width:100%; table-layout:fixed;"><thead><tr>' +
+  '<div class="table-scroll"><table class="ptable desirable-table" style="width:100%; table-layout:fixed;"><thead><tr>' +
     '<th style="width:36px;">เลขที่</th><th style="width:130px;">ชื่อ - นามสกุล</th>' + headerCols +
     '<th style="width:52px;">เฉลี่ย</th><th style="width:68px;">ระดับคุณภาพ</th>' +
   '</tr></thead><tbody>'+bodyRows+'</tbody></table></div>' +
