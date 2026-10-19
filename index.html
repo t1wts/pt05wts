@@ -92,6 +92,32 @@
     cursor:pointer; margin-bottom:8px; text-align:left;
   }
   .side-btn:hover{ background:rgba(244,241,232,0.08); }
+
+  /* ปุ่มย้อนกลับ / เรียกคืน (ดีไซน์แคปซูล: วงกลมไอคอน + ข้อความ) */
+  .hist-inline{ display:flex; align-items:center; gap:5px; margin-left:auto; flex-wrap:nowrap; }
+  .hist-btn{ display:inline-flex; align-items:center; gap:5px; border:none; cursor:pointer; color:#fff;
+    height:30px; padding:0 10px 0 3px; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap;
+    box-shadow:0 1px 3px rgba(0,0,0,.25); transition:transform .1s, filter .15s, opacity .15s; }
+  .hist-btn.undo{ background:linear-gradient(135deg,#4A8BEE,#3C78DC); }
+  .hist-btn.redo{ background:linear-gradient(135deg,#9585E6,#7F6BDA); }
+  .hist-btn .hb-ic{ width:24px; height:24px; border-radius:50%; background:rgba(255,255,255,.92); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .hist-btn.undo .hb-ic{ color:#2F6BD0; } .hist-btn.redo .hb-ic{ color:#6A55CC; }
+  .hist-btn:hover:not(:disabled){ filter:brightness(1.08); }
+  .hist-btn:active:not(:disabled){ transform:scale(.95); }
+  .hist-btn:focus-visible{ outline:2px solid var(--gold-on-dark); outline-offset:2px; }
+  .hist-btn:disabled{ opacity:.4; filter:grayscale(.5); cursor:not-allowed; box-shadow:none; }
+  /* ปุ่มลอยมุมจอ (เฉพาะโทรศัพท์/จอเล็ก) */
+  .hist-fab{ display:none; }
+  @media (max-width: 880px){
+    .brand-title .hist-inline{ display:none; } /* ในเมนูข้างซ่อนไว้ เพราะมีปุ่มลอยแทน */
+    .hist-fab{ display:flex; position:fixed; right:8px; top:calc(11px + env(safe-area-inset-top, 0px)); z-index:35; gap:5px; }
+    .hist-fab.hide{ display:none; }
+    .hist-fab .hist-btn{ height:30px; padding:0 9px 0 3px; font-size:11.5px; gap:4px; box-shadow:0 2px 6px rgba(0,0,0,.30); }
+    .hist-fab .hist-btn .hb-ic{ width:24px; height:24px; }
+    .mobile-topbar{ padding-right:172px; }
+    .mobile-topbar .mt-title{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  }
+  @media print{ .hist-fab{ display:none !important; } }
   .side-btn.danger{ color:#E9B7A8; border-color:rgba(233,183,168,0.4); }
   .data-controls .side-btn{ font-size:15.5px; }
   .data-controls #cloudUser{ font-size:13.5px; }
@@ -4109,6 +4135,8 @@ function icon(name, size, color){
     case "star": return '<svg '+common+'><polygon points="12 2 15 8.5 22 9.5 17 14.5 18.5 21.5 12 18 5.5 21.5 7 14.5 2 9.5 9 8.5 12 2"/></svg>';
     case "book": return '<svg '+common+'><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>';
     case "graduation": return '<svg '+common+'><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12v5c0 1.5 3 3 6 3s6-1.5 6-3v-5"/><path d="M22 10v6"/></svg>';
+    case "arrowLeft": return '<svg '+common+'><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>';
+    case "rotateCcw": return '<svg '+common+'><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>';
     case "undo": return '<svg '+common+'><path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 7"/></svg>';
     case "save": return '<svg '+common+'><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>';
     case "redo": return '<svg '+common+'><path d="M21 7v6h-6"/><path d="M21 13a9 9 0 1 1-3-7.7L21 7"/></svg>';
@@ -4129,6 +4157,14 @@ var NAV_ITEMS = [
   {key:"yeargrade", label:"ตัดเกรดปีการศึกษา", icon:"graduation"}
 ];
 
+/* ปุ่มย้อนกลับ/เรียกคืน (ใช้ทั้งในเมนูข้างหลังคำว่า ปถ.05 และปุ่มลอยบนมือถือ) */
+function histButtons(cls){
+  return '<div class="'+cls+'">' +
+    '<button class="hist-btn undo" title="ย้อนกลับ (Ctrl+Z)" '+(undoPointer<=0?'disabled':'')+' onclick="appUndo()"><span class="hb-ic">'+icon("arrowLeft",16)+'</span>ย้อนกลับ</button>' +
+    '<button class="hist-btn redo" title="เรียกคืน (Ctrl+Y)" '+(undoPointer>=undoHistory.length-1?'disabled':'')+' onclick="appRedo()"><span class="hb-ic">'+icon("rotateCcw",16)+'</span>เรียกคืน</button>' +
+  '</div>';
+}
+
 function renderSidebar(){
   var subjOptions = DB.order.map(function(id){
     var s = DB.subjects[id];
@@ -4144,8 +4180,8 @@ function renderSidebar(){
   return '' +
   '<div class="sidebar '+(UI.sidebarOpen ? "open" : "")+'" id="sidebarEl">' +
     '<div class="brand"><div class="brand-title" style="display:flex;align-items:center;gap:8px;"><span>ปถ.05</span>' +
-      '<button class="side-btn" style="width:auto;margin:0;padding:5px 8px;" title="ย้อนกลับ (Ctrl+Z)" '+(undoPointer<=0?'disabled':'')+' onclick="appUndo()">'+icon("undo",15)+'</button>' +
-      '<button class="side-btn" style="width:auto;margin:0;padding:5px 8px;" title="ทำซ้ำ (Ctrl+Y)" '+(undoPointer>=undoHistory.length-1?'disabled':'')+' onclick="appRedo()">'+icon("redo",15)+'</button></div></div>' +
+      histButtons('hist-inline') +
+    '</div></div>' +
     '<div class="subject-box">' +
       '<label>วิชาที่กำลังแก้ไข</label>' +
       '<select class="subject-select" onchange="switchSubject(this.value)">'+subjOptions+'</select>' +
@@ -7052,6 +7088,7 @@ function renderApp(){
     renderSidebar() +
     '<div class="main">' + (UI.tab === "yeargrade" ? "" : renderTopFieldsBox(s)) + tabHtml + '</div>' +
   '</div>' +
+  histButtons('hist-fab no-print' + (UI.sidebarOpen ? ' hide' : '')) +
   (UI.tab === "yeargrade" ? renderYearPrintAreas() : renderPrintAreas(s, comp));
 }
 
