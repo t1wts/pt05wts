@@ -388,6 +388,10 @@
     .roster-table tbody td:first-child{ background:#fff; box-shadow:1px 0 0 var(--line); }
     .roster-table thead th:first-child{ z-index:3; box-shadow:1px 0 0 var(--line); }
   }
+  /* มือถือแนวตั้ง: ตารางเวลาเรียน/คะแนน/อ่านเขียน ฯลฯ ตรึงแค่คอลัมน์ "เลขที่" ไม่ตรึงคอลัมน์ชื่อ (เพื่อให้มีที่เห็นช่องกรอกมากขึ้น) · แนวนอนยังตรึงทั้งสองเหมือนเดิม */
+  @media screen and (max-width: 880px) and (orientation: portrait){
+    th[style*="left:40px"], td[style*="left:40px"]{ position:static !important; box-shadow:none !important; }
+  }
 .fill-handle{ position:fixed; width:9px; height:9px; background:#2F6FED; border:1.5px solid #fff; box-shadow:0 0 0 1px #2F6FED; cursor:crosshair; z-index:9999; display:none; }
 .fill-cell-active{ box-shadow: inset 0 0 0 1.5px #2F6FED !important; }
 .fill-cell-sel{ background:#EAF1FF !important; box-shadow: inset 0 0 0 1px #9DB9F5 !important; }
