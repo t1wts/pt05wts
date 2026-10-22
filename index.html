@@ -1224,6 +1224,8 @@ function updateYearRecordField(field, value){
   yr[field] = value;
   scheduleSave(); rerender();
 }
+/* เกณฑ์เวลาเรียนขั้นต่ำ (ร้อยละ) ที่ต่ำกว่านี้ = มส (ใช้กับการตัดสินจากเวลาเรียนรวม 2 เทอมของระดับประถม) */
+var YEAR_MS_ATT_PERCENT = 80;
 /* จับคู่นักเรียนของเทอม 1 กับเทอม 2 ด้วยเลขประจำตัว (ถ้าไม่มีเลขประจำตัวทั้งคู่ ใช้ชื่อ-นามสกุลแทน) แล้วถ่วงน้ำหนักคะแนนรวมทั้งปี 50:50 */
 function computeYearSummary(yr){
   if (!yr || !yr.term1Id || !yr.term2Id) return null;
@@ -1282,10 +1284,18 @@ function computeYearSummary(yr){
 
     var yearStatus = deriveStatus(r1, r2);
 
+    /* ระดับประถมศึกษา: ตัดสิน มส จากเวลาเรียนรวม 2 เทอม (ชั่วโมงที่มาเรียนทั้งปี ÷ ชั่วโมงเรียนทั้งปี) ถ้าต่ำกว่า 80% = มส ประจำปี
+       เฉพาะนักเรียนที่ครูยังไม่ได้ตั้งสถานะ (ร/มส/ย้าย) ด้วยมือ — ถ้าครูตั้งเองไว้ ใช้ตามที่ครูตั้ง */
+    var primaryYear = isYearOnlyGradeLevel(subj2) || isYearOnlyGradeLevel(subj1);
+    var autoYearMs = primaryYear && yearStatus === "" && attPercent !== null && attPercent < YEAR_MS_ATT_PERCENT;
+    if (autoYearMs) yearStatus = "มส";
+
     /* นักเรียนที่ติด "มส" ของปีการศึกษา (เกิดจากเทอมใดเทอมหนึ่ง หรือทั้งสองเทอม) ต้องให้ผลรวมทั้งปี "ว่างทั้งหมด"
        ห้ามนำคะแนนของอีกเทอมที่ยังมีอยู่มาคำนวณ/แสดงแทน เพราะถือว่าผลการเรียนปีนี้ยังสรุปไม่ได้จนกว่าจะแก้ มส เสร็จ
        (ต่างจากกรณี "ย้าย" กลางเทอม 2 ซึ่งเทอม 1 เรียนจบสมบูรณ์แล้ว คะแนนเทอม 1 จึงยังคงใช้ได้ตามปกติ — ไม่ต้องบล็อก) */
     var isYearMs = (yearStatus === "มส");
+    /* มส อัตโนมัติจากเวลาเรียนรวมทั้งปี: คะแนนว่าง แต่ยังแสดงเวลาเรียนไว้ เพื่อให้เห็นเหตุผลที่ติด มส */
+    var hideAtt = isYearMs && !autoYearMs;
 
     var notes = [];
     if (r1 && r1.resultStatus) notes.push("เทอม1: "+r1.resultStatus);
@@ -1303,15 +1313,17 @@ function computeYearSummary(yr){
     var yearLeave = (l1 !== null || l2 !== null) ? (l1||0) + (l2||0) : null;
     var yearSick = (sk1 !== null || sk2 !== null) ? (sk1||0) + (sk2||0) : null;
 
-    if (isYearMs) notes.push("ติด มส ประจำปี — คะแนนว่างจนกว่าจะแก้ มส เสร็จ");
+    if (autoYearMs) notes.push("มส อัตโนมัติ — เวลาเรียนรวม 2 เทอม "+attPercent+"% (ต่ำกว่า "+YEAR_MS_ATT_PERCENT+"%)");
+    else if (isYearMs) notes.push("ติด มส ประจำปี — คะแนนว่างจนกว่าจะแก้ มส เสร็จ");
     return {
       no: idx+1,
       sid: (r1 && r1.sid) || (r2 && r2.sid) || "",
       name: (r1 && r1.name) || (r2 && r2.name) || "",
-      attPercent: isYearMs ? null : attPercent,
-      term1Hours: isYearMs ? null : h1, term2Hours: isYearMs ? null : h2,
-      yearHours: isYearMs ? null : hoursSum,
-      absentCount: isYearMs ? null : yearAbsent, leaveCount: isYearMs ? null : yearLeave, sickCount: isYearMs ? null : yearSick,
+      attPercent: hideAtt ? null : attPercent,
+      autoYearMs: autoYearMs,
+      term1Hours: hideAtt ? null : h1, term2Hours: hideAtt ? null : h2,
+      yearHours: hideAtt ? null : hoursSum,
+      absentCount: hideAtt ? null : yearAbsent, leaveCount: hideAtt ? null : yearLeave, sickCount: hideAtt ? null : yearSick,
       term1Total: isYearMs ? null : t1, term2Total: isYearMs ? null : t2,
       yearTotal: isYearMs ? null : yearTotal, yearGrade: isYearMs ? null : yearGrade, yearStatus: yearStatus,
       desirableAvg: isYearMs ? null : des.avg, readWriteAvg: isYearMs ? null : rw.avg,
@@ -1680,6 +1692,15 @@ function updateStudentStatus(id, value){
   var st = s.students.find(function(x){ return x.id === id; });
   if (st) st.resultStatus = value;
   scheduleSave(); rerender();
+}
+/* ค่าพิเศษของ "ย้ายตั้งแต่": ย้ายตั้งแต่วันแรก (ไม่ได้มาเรียนเลยแม้แต่วันเดียว) */
+var TRANSFER_FROM_START = "__start__";
+/* ตำแหน่งวันสุดท้ายที่นักเรียนยังนับเวลาเรียน: -1 = ไม่ได้ย้าย (นับทุกวัน), -2 = ย้ายตั้งแต่วันแรก (ไม่นับทุกวัน),
+   0..n = ย้ายตั้งแต่วันที่ตำแหน่งนั้น (วันถัดไปไม่นับ) — ใช้เงื่อนไข "idx > transferIndex" เหมือนเดิมได้ทุกกรณี */
+function transferIndexFor(sessions, transferSessionId){
+  if (!transferSessionId) return -1;
+  if (transferSessionId === TRANSFER_FROM_START) return -2;
+  return sessions.findIndex(function(x){ return x.id === transferSessionId; });
 }
 function updateStudentTransferSession(id, sessionId){
   var s = getSubj();
@@ -4122,8 +4143,12 @@ function computeSubject(s){
     var effectiveMidtermRaw = hasMakeupMid ? makeupMidRaw : midtermSumRaw;
     /* ถ้าโครงสร้างไม่ได้กำหนดรายการของช่วงนั้นเลย (เช่นไม่มีสอบกลางภาค) และไม่มีคะแนนแก้ตัวมาแทน
        ให้แสดงผลเป็นช่องว่าง (null -> "-") แทนที่จะเป็น 0 แต่ยังคงใช้ 0 ในการคำนวณคะแนนรวมตามปกติ */
-    var midtermSumDisplay = (midtermItems.length === 0 && !hasMakeupMid) ? null : midtermSumRaw;
-    var finalSumDisplay = (finalItems.length === 0 && !hasMakeup) ? null : finalSumRaw;
+    /* "ไม่ได้กำหนดคะแนนเต็ม" = ไม่มีรายการเลย หรือมีรายการแต่คะแนนเต็มรวมเป็น 0/ว่าง (เช่น ตัวชี้วัดที่ไม่มีสอบกลางภาค) → แสดง "-" แทน 0 */
+    function maxOf(items){ return items.reduce(function(sum,it){ return sum + (Number(it.max)||0); }, 0); }
+    var beforeMaxDef = maxOf(collectBeforeItems) > 0, afterMaxDef = maxOf(collectAfterItems) > 0;
+    var midDef = maxOf(midtermItems) > 0 || hasMakeupMid, finDef = maxOf(finalItems) > 0 || hasMakeup;
+    var midtermSumDisplay = midDef ? midtermSumRaw : null;
+    var finalSumDisplay = finDef ? finalSumRaw : null;
     var collectPlusMidtermRaw = collectSumRaw + effectiveMidtermRaw;
     var examSumRaw = effectiveMidtermRaw + effectiveFinalRaw;
     var totalRaw = collectSumRaw + effectiveMidtermRaw + effectiveFinalRaw;
@@ -4141,7 +4166,7 @@ function computeSubject(s){
     /* นับจำนวนครั้งขาด/ลา ของนักเรียนคนนี้ตลอดวิชา (ไม่นับวันหยุด และไม่นับหลังวันที่ย้ายออก ถ้ามี)
        ใช้ร่วมกับหน้าสรุปเวลาเรียนรายปี เพื่อรวมยอดขาด/ลาของทั้ง 2 เทอม */
     var transferSessionId = st.transferSessionId || "";
-    var transferIndex = transferSessionId ? s.sessions.findIndex(function(x){ return x.id === transferSessionId; }) : -1;
+    var transferIndex = transferIndexFor(s.sessions, transferSessionId);
     var absentCountRaw = 0, leaveCountRaw = 0, sickCountRaw = 0;
     s.sessions.forEach(function(sess, sIdx){
       if (sess.holiday) return;
@@ -4155,7 +4180,12 @@ function computeSubject(s){
     // manual status set by the teacher: "" / "ร" / "มส" / "ย้าย"
     var manualStatus = st.resultStatus || "";
     // attendance below 80% auto-triggers มส unless the teacher already set something else
-    var autoMs = (manualStatus === "" && totalHoursRecorded > 0 && attPercentRaw < 80);
+    /* ระดับประถมศึกษา (เลือกที่หน้าปก): ไม่ตัด มส อัตโนมัติรายเทอม เพราะต้องรวมเวลาเรียนของ 2 เทอมก่อนจึงตัดสิน มส ได้
+       (ไปตัดที่หน้าสรุปปีการศึกษา — computeYearSummary) เล่มรายเทอมแค่แจ้งเตือนว่าเวลาเรียนเทอมนี้ต่ำกว่า 80%
+       ส่วนระดับอื่น (มัธยม) ยังตัด มส อัตโนมัติรายเทอมเหมือนเดิม ครูตั้ง มส/ร/ย้าย ด้วยมือได้ทุกระดับ */
+    var termPrimaryRow = isYearOnlyGradeLevel(s);
+    var lowAttendanceRaw = (manualStatus === "" && totalHoursRecorded > 0 && attPercentRaw < 80);
+    var autoMs = lowAttendanceRaw && !termPrimaryRow;
     var resultStatus = manualStatus === "ย้าย" ? "ย้าย" : (manualStatus === "มส" || autoMs) ? "มส" : manualStatus;
     var isTransfer = resultStatus === "ย้าย";
     var isMs = resultStatus === "มส";
@@ -4171,12 +4201,13 @@ function computeSubject(s){
     return Object.assign({}, st, {
       hoursEarned: blankFields ? null : hoursEarnedRaw,
       attPercent: blankFields ? null : attPercentRaw,
+      lowAttendanceWarn: termPrimaryRow && lowAttendanceRaw && !blankFields, /* ประถม: เวลาเรียนเทอมนี้ < 80% (รอรวมทั้งปี) */
       absentCount: blankFields ? null : absentCountRaw,
       leaveCount: blankFields ? null : leaveCountRaw,
       sickCount: blankFields ? null : sickCountRaw,
       collectSum: blankFields ? null : collectSumRaw,
-      collectBeforeSum: blankFields ? null : collectBeforeSumRaw,
-      collectAfterSum: blankFields ? null : collectAfterSumRaw,
+      collectBeforeSum: (blankFields || !beforeMaxDef) ? null : collectBeforeSumRaw,
+      collectAfterSum: (blankFields || !afterMaxDef) ? null : collectAfterSumRaw,
       midtermSum: blankFields ? null : midtermSumDisplay,
       finalSum: blankFields ? null : finalSumDisplay,
       finalMax: finalMax,
@@ -4187,7 +4218,7 @@ function computeSubject(s){
       collectPlusMidterm: blankFields ? null : collectPlusMidtermRaw,
       examSum: blankFields ? null : examSumRaw,
       interimSum: blankFields ? null : interimSumRaw,
-      finalGroupSum: blankFields ? null : finalGroupSumRaw,
+      finalGroupSum: (blankFields || !(courseModeRow === "competency" ? (midDef || finDef) : finDef)) ? null : finalGroupSumRaw,
       total: total, grade: grade,
       resultStatus:resultStatus, manualStatus:manualStatus, isTransfer:isTransfer, gradeBucket:gradeBucket,
       desirableAvg: blankFields ? null : des.avg, desirableLevelText: desirableLevelText,
@@ -4701,7 +4732,7 @@ function renderAttendance(s, comp){
   var bodyRows = comp.rows.map(function(r, rowIndex){
     var st = s.students.find(function(x){ return x.id === r.id; });
     var transferSessionId = (st && st.transferSessionId) || "";
-    var transferIndex = transferSessionId ? s.sessions.findIndex(function(x){ return x.id === transferSessionId; }) : -1;
+    var transferIndex = transferIndexFor(s.sessions, transferSessionId);
     var cells = s.sessions.map(function(sess, colIndex){
       if (sess.holiday) return '<td style="text-align:center; padding:0;"><div class="att-holiday-cell"></div></td>';
       if (transferIndex !== -1 && colIndex > transferIndex) return '<td style="text-align:center; padding:0; background:#F4F4F4;"></td>';
@@ -4711,12 +4742,13 @@ function renderAttendance(s, comp){
     }).join("");
     var transferSelect = '<select style="width:100%; border:1px solid var(--line); border-radius:4px; padding:3px 2px; font-size:12.5px; background:white;" onchange="updateStudentTransferSession(\''+r.id+'\',this.value)">' +
       '<option value="">- (ไม่ย้าย)</option>' +
+      '<option value="'+TRANSFER_FROM_START+'" '+(transferSessionId===TRANSFER_FROM_START?"selected":"")+'>ย้ายตั้งแต่วันแรก</option>' +
       s.sessions.filter(function(sess){ return !sess.holiday; }).map(function(sess){
         return '<option value="'+sess.id+'" '+(sess.id===transferSessionId?"selected":"")+'>'+esc(sess.day||"-")+' '+esc(sess.month.slice(0,3))+'</option>';
       }).join("") +
     '</select>';
-    return '<tr><td style="text-align:center; position:sticky; left:0; z-index:2; background:white; box-shadow:2px 0 4px rgba(0,0,0,0.08);">'+r.no+'</td><td style="position:sticky; left:40px; z-index:2; background:white; box-shadow:2px 0 4px rgba(0,0,0,0.08);">'+(esc(r.name)||'<em style="color:var(--gray);">(ยังไม่ระบุชื่อ)</em>')+(r.resultStatus?(' <span style="font-size:11px; color:var(--red);">('+esc(r.resultStatus)+')</span>'):'')+'</td>' + cells +
-      '<td style="text-align:center; font-weight:700;">'+(r.hoursEarned!==null?r.hoursEarned:"-")+'</td><td style="text-align:center; font-weight:700;">'+(r.attPercent!==null?r.attPercent:"-")+'</td>' +
+    return '<tr><td style="text-align:center; position:sticky; left:0; z-index:2; background:white; box-shadow:2px 0 4px rgba(0,0,0,0.08);">'+r.no+'</td><td style="position:sticky; left:40px; z-index:2; background:white; box-shadow:2px 0 4px rgba(0,0,0,0.08);">'+(esc(r.name)||'<em style="color:var(--gray);">(ยังไม่ระบุชื่อ)</em>')+(r.resultStatus?(' <span style="font-size:11px; color:var(--red);">('+esc(r.resultStatus)+')</span>'):'')+(r.lowAttendanceWarn?(' <span style="font-size:11px; color:#C26A00;" title="ระดับประถม: ยังไม่ตัด มส รายเทอม — ระบบจะรวมเวลาเรียน 2 เทอมที่หน้าสรุปปีการศึกษา">⚠ เวลาเรียนเทอมนี้ต่ำกว่า 80%</span>'):'')+'</td>' + cells +
+      '<td style="text-align:center; font-weight:700;">'+(r.hoursEarned!==null?r.hoursEarned:"-")+'</td><td style="text-align:center; font-weight:700;'+(r.lowAttendanceWarn?' color:#C26A00;':'')+'">'+(r.attPercent!==null?r.attPercent:"-")+'</td>' +
       '<td style="text-align:center; padding:3px 4px;">'+transferSelect+'</td></tr>';
   }).join("");
 
@@ -4728,7 +4760,9 @@ function renderAttendance(s, comp){
   var attTableWidth = 490 + s.sessions.length*56;
   return '' +
   '<div class="section-title">บันทึกเวลาเรียน</div>' +
-  '<div class="section-sub">กำหนดวันเรียน เดือน และวันหยุดพิเศษได้เอง แล้วคลิกในตารางเพื่อบันทึกการมาเรียน · กำหนดตายตัวว่า 1 วัน = 1 ชั่วโมงเสมอ ถ้าวิชานี้เรียนวันเดิม 2 ชั่วโมงขึ้นไป ให้กดปุ่ม "+" ที่ท้ายแถวเพื่อสร้างวันซ้ำ (วันที่เดิม) แทนการเพิ่มจำนวนชั่วโมงในแถวเดียว · เลื่อนตารางด้านล่างไปทางขวาได้ทั้งจากแถบเลื่อนด้านบนหรือด้านล่างตาราง · เลือก "ย้ายตั้งแต่" ในตารางด้านล่างแล้วระบบจะตั้งสถานะเป็น "ย้าย" ให้อัตโนมัติในแท็บคะแนน · นักเรียนที่เวลาเรียนต่ำกว่า 80% จะได้สถานะ "มส" ให้อัตโนมัติในแท็บคะแนนเช่นกัน</div>' +
+  '<div class="section-sub">กำหนดวันเรียน เดือน และวันหยุดพิเศษได้เอง แล้วคลิกในตารางเพื่อบันทึกการมาเรียน · กำหนดตายตัวว่า 1 วัน = 1 ชั่วโมงเสมอ ถ้าวิชานี้เรียนวันเดิม 2 ชั่วโมงขึ้นไป ให้กดปุ่ม "+" ที่ท้ายแถวเพื่อสร้างวันซ้ำ (วันที่เดิม) แทนการเพิ่มจำนวนชั่วโมงในแถวเดียว · เลื่อนตารางด้านล่างไปทางขวาได้ทั้งจากแถบเลื่อนด้านบนหรือด้านล่างตาราง · เลือก "ย้ายตั้งแต่" (เลือกได้ตั้งแต่ "ย้ายตั้งแต่วันแรก") ในตารางด้านล่างแล้วระบบจะตั้งสถานะเป็น "ย้าย" ให้อัตโนมัติในแท็บคะแนน · '+(isYearOnlyGradeLevel(s)
+      ? 'ระดับประถมศึกษา: ไม่ตัด "มส" รายเทอม ถ้าเวลาเรียนเทอมนี้ต่ำกว่า 80% จะขึ้น ⚠ เตือนไว้เฉย ๆ — ระบบรวมเวลาเรียน 2 เทอมแล้วตัด "มส" ที่หน้าสรุปปีการศึกษา (ครูตั้ง "มส" ด้วยมือในแท็บคะแนนได้เอง)'
+      : 'นักเรียนที่เวลาเรียนต่ำกว่า 80% จะได้สถานะ "มส" ให้อัตโนมัติในแท็บคะแนนเช่นกัน')+'</div>' +
   '<div style="display:flex; align-items:center; gap:18px; margin-bottom:16px; flex-wrap:wrap;">' +
     '<span style="font-size:15px; font-weight:600; color:var(--ink);">จำนวนชั่วโมงเรียน '+totalHoursRecorded+' ชม. <span style="font-weight:400; color:var(--gray);">(จาก '+teachingCount+' วันเรียน)</span></span>' +
     '<span style="font-size:15px; font-weight:600; color:var(--holiday-color, #8A8478);">จำนวนชั่วโมงวันหยุด '+holidayHours+' ชม. <span style="font-weight:400; color:var(--gray);">(จาก '+holidayCount+' วันหยุด)</span></span>' +
@@ -5177,7 +5211,7 @@ function buildAttPastePreview(){
 
     var st = matched ? s.students.find(function(x){ return x.id === matched.id; }) : null;
     var transferSessionId = (st && st.transferSessionId) || "";
-    var transferIndex = transferSessionId ? s.sessions.findIndex(function(x){ return x.id === transferSessionId; }) : -1;
+    var transferIndex = transferIndexFor(s.sessions, transferSessionId);
     var blocked = !!(matched && matched.resultStatus === "มส");
 
     var values = sessions.map(function(sess){
@@ -5478,15 +5512,15 @@ function renderScores(s, comp){
     var tint = it.type === "collect" ? "var(--collect-tint)" : "var(--exam-tint)";
     var val = s.scores[r.id].items[it.id] !== undefined ? s.scores[r.id].items[it.id] : "";
     var isOver = val !== "" && !isNaN(Number(val)) && Number(val) > Number(it.max);
-    /* คะแนนไม่เกินครึ่งของคะแนนเต็ม — แจ้งเตือนให้ครูเห็นเฉยๆ ไม่ส่งผลต่อการคำนวณหรือการกรอกใดๆ */
-    var isLow = !isOver && val !== "" && !isNaN(Number(val)) && Number(it.max) > 0 && Number(val) <= Number(it.max)/2;
+    /* คะแนนต่ำกว่าครึ่งของคะแนนเต็ม (เท่ากับ 50% พอดีไม่เตือน) — แจ้งเตือนให้ครูเห็นเฉยๆ ไม่ส่งผลต่อการคำนวณหรือการกรอกใดๆ */
+    var isLow = !isOver && val !== "" && !isNaN(Number(val)) && Number(it.max) > 0 && Number(val) < Number(it.max)/2;
     var borderStyle = isOver ? "border:2px solid var(--red); background:#FCE4E4;"
       : isLow ? "border:2px solid var(--amber); background:#FCF3DC;"
       : "border:1px solid var(--line);";
     var disAttr = blocked ? ' disabled title="นักเรียนสถานะ ย้าย/มส ไม่สามารถกรอกคะแนนได้"' : '';
     var bg = blocked ? '#EEE' : 'white';
     return '<td style="text-align:center; padding:3px 4px; background:'+tint+';">' +
-      '<input id="f_score_'+r.id+'_'+it.id+'" data-srow="'+rowIndex+'" data-scol="'+colIndex+'" data-studentid="'+r.id+'" data-itemid="'+it.id+'" type="text" inputmode="decimal" value="'+esc(blocked?"":val)+'" placeholder="0"'+disAttr+' title="เต็ม '+it.max+(isOver?" — เกินคะแนนเต็ม!":(isLow?" — คะแนนไม่เกินครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+borderStyle+' background:'+bg+'; border-radius:4px; text-align:center;" oninput="updateItemScore(\''+r.id+'\',\''+it.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
+      '<input id="f_score_'+r.id+'_'+it.id+'" data-srow="'+rowIndex+'" data-scol="'+colIndex+'" data-studentid="'+r.id+'" data-itemid="'+it.id+'" type="text" inputmode="decimal" value="'+esc(blocked?"":val)+'" placeholder="0"'+disAttr+' title="เต็ม '+it.max+(isOver?" — เกินคะแนนเต็ม!":(isLow?" — คะแนนต่ำกว่าครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+borderStyle+' background:'+bg+'; border-radius:4px; text-align:center;" oninput="updateItemScore(\''+r.id+'\',\''+it.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
       (isOver ? '<div style="font-size:10px; color:var(--red); font-weight:700;">เกินเต็ม!</div>' : '') +
       (isLow ? '<div style="font-size:10px; color:var(--amber); font-weight:700;">คะแนนต่ำ⚠</div>' : '') +
     '</td>';
@@ -5501,14 +5535,14 @@ function renderScores(s, comp){
     var cells = orderedItems.map(function(it, colIndex){ return scoreInput(r, it, rowIndex, colIndex, blocked); }).join("");
     var makeupVal = s.scores[r.id].makeup !== undefined ? s.scores[r.id].makeup : "";
     var makeupOver = makeupVal !== "" && !isNaN(Number(makeupVal)) && Number(makeupVal) > finalMaxTotal;
-    var makeupLow = !makeupOver && makeupVal !== "" && !isNaN(Number(makeupVal)) && finalMaxTotal > 0 && Number(makeupVal) <= finalMaxTotal/2;
+    var makeupLow = !makeupOver && makeupVal !== "" && !isNaN(Number(makeupVal)) && finalMaxTotal > 0 && Number(makeupVal) < finalMaxTotal/2;
     var makeupBorder = makeupOver ? "border:2px solid var(--red); background:#FCE4E4;" : (makeupLow ? "border:2px solid var(--amber); background:#FCF3DC;" : "border:1px solid var(--line);");
     var makeupDisAttr = blocked ? ' disabled title="นักเรียนสถานะ ย้าย/มส ไม่สามารถกรอกคะแนนได้"' : '';
     var makeupBg = blocked ? '#EEE' : 'white';
     var midtermMaxTotal = midtermItems.reduce(function(sum,it){ return sum + (Number(it.max)||0); }, 0);
     var makeupMidVal = s.scores[r.id].makeupMid !== undefined ? s.scores[r.id].makeupMid : "";
     var makeupMidOver = makeupMidVal !== "" && !isNaN(Number(makeupMidVal)) && Number(makeupMidVal) > midtermMaxTotal;
-    var makeupMidLow = !makeupMidOver && makeupMidVal !== "" && !isNaN(Number(makeupMidVal)) && midtermMaxTotal > 0 && Number(makeupMidVal) <= midtermMaxTotal/2;
+    var makeupMidLow = !makeupMidOver && makeupMidVal !== "" && !isNaN(Number(makeupMidVal)) && midtermMaxTotal > 0 && Number(makeupMidVal) < midtermMaxTotal/2;
     var makeupMidBorder = makeupMidOver ? "border:2px solid var(--red); background:#FCE4E4;" : (makeupMidLow ? "border:2px solid var(--amber); background:#FCF3DC;" : "border:1px solid var(--line);");
     var makeupMidDisAttr = blocked ? ' disabled title="นักเรียนสถานะ ย้าย/มส ไม่สามารถกรอกคะแนนได้"' : '';
     var makeupMidBg = blocked ? '#EEE' : 'white';
@@ -5518,14 +5552,14 @@ function renderScores(s, comp){
       '<td style="text-align:center; font-weight:600;">'+(r.collectSum !== null ? r.collectSum : "-")+'</td>' +
       '<td style="text-align:center;">'+(r.midtermSum !== null ? r.midtermSum : "-")+'</td>' +
       '<td style="text-align:center; padding:3px 4px; background:#FFF6F4;">' +
-        '<input id="f_makeupMid_'+r.id+'" data-srow="'+rowIndex+'" data-scol="'+makeupMidColIndex+'" data-studentid="'+r.id+'" data-itemid="__makeupMid__" type="text" inputmode="decimal" value="'+esc(blocked?"":makeupMidVal)+'" placeholder="-"'+makeupMidDisAttr+' title="คะแนนสอบแก้ตัว เต็ม '+midtermMaxTotal+(makeupMidOver?" — เกินคะแนนเต็ม!":(makeupMidLow?" — คะแนนไม่เกินครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+makeupMidBorder+' background:'+makeupMidBg+'; border-radius:4px; text-align:center;" oninput="updateMakeupMidScore(\''+r.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
+        '<input id="f_makeupMid_'+r.id+'" data-srow="'+rowIndex+'" data-scol="'+makeupMidColIndex+'" data-studentid="'+r.id+'" data-itemid="__makeupMid__" type="text" inputmode="decimal" value="'+esc(blocked?"":makeupMidVal)+'" placeholder="-"'+makeupMidDisAttr+' title="คะแนนสอบแก้ตัว เต็ม '+midtermMaxTotal+(makeupMidOver?" — เกินคะแนนเต็ม!":(makeupMidLow?" — คะแนนต่ำกว่าครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+makeupMidBorder+' background:'+makeupMidBg+'; border-radius:4px; text-align:center;" oninput="updateMakeupMidScore(\''+r.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
         (makeupMidOver ? '<div style="font-size:10px; color:var(--red); font-weight:700;">เกินเต็ม!</div>' : '') +
         (makeupMidLow ? '<div style="font-size:10px; color:var(--amber); font-weight:700;">คะแนนต่ำ⚠</div>' : '') +
       '</td>' +
       '<td style="text-align:center; font-weight:600;">'+(r.interimSum !== null ? r.interimSum : "-")+'</td>' +
       '<td style="text-align:center;">'+(r.finalSum !== null ? r.finalSum : "-")+'</td>' +
       '<td style="text-align:center; padding:3px 4px; background:#FFF6F4;">' +
-        '<input id="f_makeup_'+r.id+'" data-srow="'+rowIndex+'" data-scol="'+makeupColIndex+'" data-studentid="'+r.id+'" data-itemid="__makeup__" type="text" inputmode="decimal" value="'+esc(blocked?"":makeupVal)+'" placeholder="-"'+makeupDisAttr+' title="คะแนนสอบแก้ตัว เต็ม '+finalMaxTotal+(makeupOver?" — เกินคะแนนเต็ม!":(makeupLow?" — คะแนนไม่เกินครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+makeupBorder+' background:'+makeupBg+'; border-radius:4px; text-align:center;" oninput="updateMakeupScore(\''+r.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
+        '<input id="f_makeup_'+r.id+'" data-srow="'+rowIndex+'" data-scol="'+makeupColIndex+'" data-studentid="'+r.id+'" data-itemid="__makeup__" type="text" inputmode="decimal" value="'+esc(blocked?"":makeupVal)+'" placeholder="-"'+makeupDisAttr+' title="คะแนนสอบแก้ตัว เต็ม '+finalMaxTotal+(makeupOver?" — เกินคะแนนเต็ม!":(makeupLow?" — คะแนนต่ำกว่าครึ่งของคะแนนเต็ม":""))+'" style="width:60px; padding:4px 6px; '+makeupBorder+' background:'+makeupBg+'; border-radius:4px; text-align:center;" oninput="updateMakeupScore(\''+r.id+'\',this.value)" onkeydown="handleGridInputKeydown(event)"/>' +
         (makeupOver ? '<div style="font-size:10px; color:var(--red); font-weight:700;">เกินเต็ม!</div>' : '') +
         (makeupLow ? '<div style="font-size:10px; color:var(--amber); font-weight:700;">คะแนนต่ำ⚠</div>' : '') +
       '</td>' +
@@ -5543,7 +5577,7 @@ function renderScores(s, comp){
   var scoreTableWidth = 900 + s.structure.length*100;
   return '' +
   '<div class="section-title">กรอกคะแนน</div>' +
-  '<div class="section-sub">คอลัมน์ในตารางนี้สร้างจากหน้า "โครงสร้างรายวิชา" โดยอัตโนมัติ แบ่งเป็นกลุ่ม "ก่อนกลางภาค" / "หลังกลางภาค" / "สอบกลางภาค" / "สอบปลายภาค" · ช่องกรอกคะแนนจะขึ้นกรอบแดง "เกินเต็ม!" ทันทีถ้ากรอกเกินคะแนนเต็มของรายการนั้น หรือขึ้นกรอบสีเหลือง "คะแนนต่ำ⚠" ถ้ากรอกคะแนนไม่เกินครึ่งของคะแนนเต็ม (แจ้งเตือนเฉยๆ ไม่มีผลต่อการคำนวณ) · "ช่องแก้ไข" ใช้สำหรับนักเรียนที่มาสอบแก้ตัว ถ้ากรอกคะแนนในช่องนี้ ระบบจะใช้แทนคะแนนสอบกลางภาค/ปลายภาค (ตามช่อง) ในการคำนวณคะแนนรวมทั้งหมด · คอลัมน์ "สถานะ" ใช้กำหนดผล ร/มส/ย้าย ด้วยตนเอง · นักเรียนที่เวลาเรียนไม่ถึง 80% จะได้ มส อัตโนมัติ (ถ้ายังไม่ได้กำหนดสถานะอื่นไว้) · นักเรียนที่เป็น มส หรือ ย้าย จะไม่มีข้อมูลเวลาเรียน/คะแนนในหน้าสรุป และนักเรียนที่ย้ายจะไม่ถูกนับรวมในสถิติหน้าปก · ช่องกรอกคะแนนทุกช่อง (ตัวชี้วัด/สอบ/ช่องแก้ไข/คุณลักษณะ/อ่านเขียน) ของนักเรียนสถานะ ย้าย/มส จะถูกล็อกให้กรอกไม่ได้โดยอัตโนมัติ · เลื่อนตารางด้านล่างไปทางขวาได้ทั้งจากแถบเลื่อนด้านบนหรือด้านล่างตาราง</div>' +
+  '<div class="section-sub">คอลัมน์ในตารางนี้สร้างจากหน้า "โครงสร้างรายวิชา" โดยอัตโนมัติ แบ่งเป็นกลุ่ม "ก่อนกลางภาค" / "หลังกลางภาค" / "สอบกลางภาค" / "สอบปลายภาค" · ช่องกรอกคะแนนจะขึ้นกรอบแดง "เกินเต็ม!" ทันทีถ้ากรอกเกินคะแนนเต็มของรายการนั้น หรือขึ้นกรอบสีเหลือง "คะแนนต่ำ⚠" ถ้ากรอกคะแนนต่ำกว่าครึ่งของคะแนนเต็ม (แจ้งเตือนเฉยๆ ไม่มีผลต่อการคำนวณ) · "ช่องแก้ไข" ใช้สำหรับนักเรียนที่มาสอบแก้ตัว ถ้ากรอกคะแนนในช่องนี้ ระบบจะใช้แทนคะแนนสอบกลางภาค/ปลายภาค (ตามช่อง) ในการคำนวณคะแนนรวมทั้งหมด · คอลัมน์ "สถานะ" ใช้กำหนดผล ร/มส/ย้าย ด้วยตนเอง · นักเรียนที่เวลาเรียนไม่ถึง 80% จะได้ มส อัตโนมัติ (ถ้ายังไม่ได้กำหนดสถานะอื่นไว้) · นักเรียนที่เป็น มส หรือ ย้าย จะไม่มีข้อมูลเวลาเรียน/คะแนนในหน้าสรุป และนักเรียนที่ย้ายจะไม่ถูกนับรวมในสถิติหน้าปก · ช่องกรอกคะแนนทุกช่อง (ตัวชี้วัด/สอบ/ช่องแก้ไข/คุณลักษณะ/อ่านเขียน) ของนักเรียนสถานะ ย้าย/มส จะถูกล็อกให้กรอกไม่ได้โดยอัตโนมัติ · เลื่อนตารางด้านล่างไปทางขวาได้ทั้งจากแถบเลื่อนด้านบนหรือด้านล่างตาราง</div>' +
   '<div id="scoreScrollTop" class="table-scroll" style="height:16px; overflow-y:hidden;" onscroll="syncScrollLeft(\'scoreScrollTop\',\'scoreScrollBottom\')"><div style="width:'+scoreTableWidth+'px; height:1px;"></div></div>' +
   '<div id="scoreScrollBottom" class="table-scroll drag-scroll" tabindex="0" title="ลากเมาส์ค้าง หรือโฟกัสแล้วกดลูกศรซ้าย-ขวา เพื่อเลื่อนดูรายการคะแนนถัดไป" onmousedown="startDragScroll(event,\'scoreScrollBottom\',\'scoreScrollTop\')" onkeydown="handleScrollAreaKeydown(event,\'scoreScrollBottom\',\'scoreScrollTop\')" onscroll="syncScrollLeft(\'scoreScrollBottom\',\'scoreScrollTop\')"><table class="ptable" style="min-width:'+scoreTableWidth+'px;"><thead>' +
     '<tr>'+groupRow+'</tr><tr>'+itemRow+'</tr>' +
@@ -6772,7 +6806,7 @@ function scoreDetailHeaderCells(items){
   return items.map(function(it){
     var showsBar = it.type === "collect" || examItemNeedsIndicatorBar(it, items);
     var topLabel = showsBar ? esc(it.indicatorNo || "") : "";
-    return '<th style="border:1px solid #333; padding:2px; font-size:12px;">'+(topLabel ? (topLabel+'<br/>') : '')+'<span style="font-weight:400;">เต็ม '+it.max+'</span></th>';
+    return '<th style="border:1px solid #333; padding:2px; font-size:12px;">'+(topLabel ? (topLabel+'<br/>') : '')+'<span style="font-weight:400;">'+(Number(it.max) > 0 ? 'เต็ม '+it.max : '-')+'</span></th>';
   }).join("");
 }
 function scoreDetailRows(s, comp, items, sumKey, fillerColCount){
@@ -6787,6 +6821,8 @@ function scoreDetailRows(s, comp, items, sumKey, fillerColCount){
     var rowBlank = (sumVal === null || sumVal === undefined);
     var cells = items.map(function(it){
       if (rowBlank) return '<td style="border:1px solid #333; text-align:center; padding:1px;"></td>';
+      /* ตัวชี้วัดที่ไม่ได้กำหนดคะแนนเต็มไว้ แสดง "-" */
+      if (!(Number(it.max) > 0)) return '<td style="border:1px solid #333; text-align:center; padding:1px;">-</td>';
       var val = sc.items[it.id];
       return '<td style="border:1px solid #333; text-align:center; padding:1px;">'+(val!==undefined && val!==""?esc(val):"")+'</td>';
     }).join("");
@@ -6876,6 +6912,8 @@ function renderExamScorePrintPage(s, comp, info, midtermItems, finalItems, pageN
     function cellsFor(items){
       return items.map(function(it){
         if (rowBlank) return '<td style="border:1px solid #333; text-align:center; padding:1.5px;"></td>';
+        /* ตัวชี้วัดที่ไม่ได้กำหนดคะแนนเต็มไว้ (เช่น ไม่มีสอบกลางภาค) แสดง "-" */
+        if (!(Number(it.max) > 0)) return '<td style="border:1px solid #333; text-align:center; padding:1.5px;">-</td>';
         var val = sc.items[it.id];
         return '<td style="border:1px solid #333; text-align:center; padding:1.5px;">'+(val!==undefined && val!==""?esc(val):"")+'</td>';
       }).join("");
@@ -7030,6 +7068,8 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
   var chunks = [];
   for (var i=0;i<sessions.length;i+=CHUNK_SIZE) chunks.push(sessions.slice(i, i+CHUNK_SIZE));
   if (!chunks.length) chunks = [[]];
+  /* ระดับประถมศึกษา: หน้าพิมพ์เวลาเรียนรายเทอมไม่แสดงคอลัมน์ร้อยละ (ไปสรุปรวม 2 เทอมที่หน้าสรุปเวลาเรียนตลอดปี) */
+  var hidePctCol = isYearOnlyGradeLevel(s);
 
   /* คำนวณ "ชั่วโมงที่เท่าไหร่" สะสมของแต่ละวันเรียน (ไม่นับวันหยุด) ล่วงหน้าครั้งเดียวสำหรับทั้งวิชา
      เพื่อให้เลขชั่วโมงต่อเนื่องกันถูกต้องแม้ตารางจะถูกแบ่งหน้า (chunk) เวลาพิมพ์
@@ -7098,7 +7138,7 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
     var bodyRows = comp.rows.map(function(r){
       var stu = s.students.find(function(x){ return x.id === r.id; });
       var transferSessionId = (stu && stu.transferSessionId) || "";
-      var transferIndex = transferSessionId ? sessions.findIndex(function(x){ return x.id === transferSessionId; }) : -1;
+      var transferIndex = transferIndexFor(sessions, transferSessionId);
       var att = s.attendance[r.id] || {};
       var cells = chunkSessions.map(function(sess){
         if (sess.holiday) return holidaySessionCell(sess);
@@ -7130,7 +7170,7 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
           '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (leaveCount || "-") + '</td>' +
           '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (sickCount || "-") + '</td>' +
           '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center; font-weight:700;">' + (r.hoursEarned!==null?r.hoursEarned:"-") + '</td>' +
-          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (r.attPercent!==null?r.attPercent:"-") + '</td>' +
+          (hidePctCol ? '' : '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (r.attPercent!==null?r.attPercent:"-") + '</td>') +
           '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + statusLabel + '</td>';
       }
 
@@ -7148,7 +7188,7 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
         if (sess.holiday) return holidaySessionCell(sess);
         return '<td style="border:1px solid #333; padding:1.5px 2px;"></td>';
       }).join("");
-      var padSummaryCells = isLastChunk ? Array(6).fill('<td style="border:1px solid #333; padding:1.5px 2px;"></td>').join('') : "";
+      var padSummaryCells = isLastChunk ? Array(hidePctCol ? 5 : 6).fill('<td style="border:1px solid #333; padding:1.5px 2px;"></td>').join('') : "";
       bodyRows += '<tr>' +
         '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center; font-size:14px;">' + (rIdx+1) + '</td>' +
         '<td style="border:1px solid #333; padding:1.5px 4px;">&nbsp;</td>' +
@@ -7162,7 +7202,7 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
       '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:26px;">ลา</th>' +
       '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:26px;">ป่วย</th>' +
       '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:40px;">รวม<br/>(ชม.)</th>' +
-      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:36px;">ร้อยละ</th>' +
+      (hidePctCol ? '' : '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:36px;">ร้อยละ</th>') +
       '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:40px;">สถานะ</th>'
       : "";
 
@@ -7428,7 +7468,7 @@ function dsRoster(s, comp, id){
 }
 
 function transferIndexOf(s, r){
-  return r.transferSessionId ? s.sessions.findIndex(function(x){ return x.id === r.transferSessionId; }) : -1;
+  return transferIndexFor(s.sessions, r.transferSessionId);
 }
 function attCell(s, r, sess, idx, presentMark){
   if (sess.holiday) return "";
@@ -7468,6 +7508,7 @@ function dsAttGrid(s, comp, id){
   cols.push({ key:"leave", label:"ลา (ครั้ง)", group:G, def:false, fill:true, get:function(r){ return r.leaveCount; } });
   cols.push({ key:"sick", label:"ป่วย (ครั้ง)", group:G, def:false, fill:true, get:function(r){ return r.sickCount; } });
   cols.push({ key:"transfer", label:"ย้ายตั้งแต่", group:G, def:true, get:function(r){
+    if (r.transferSessionId === TRANSFER_FROM_START) return "ย้ายตั้งแต่วันแรก";
     var ts = s.sessions.filter(function(x){ return x.id === r.transferSessionId; })[0];
     return ts ? ((ts.day || "-") + " " + (ts.month ? ts.month.slice(0,3) : "")) : "";
   } });
