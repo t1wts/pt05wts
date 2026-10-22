@@ -250,6 +250,14 @@
     body{ background:white !important; line-height:1.05; }
     .page-break{ page-break-after:always; }
 
+    /* สีพื้นอ่อนๆ ให้ช่วงหัวคอลัมน์ (ทุกหน้าพิมพ์ ตั้งแต่หน้ารายชื่อเป็นต้นไป ยกเว้นหน้าปก)
+       เพื่อแยกหัวตารางออกจากเนื้อหา — เปลี่ยนสีได้ที่ #EEF4FA ด้านล่างนี้
+       (ช่องหัวตารางที่กำหนดสีของตัวเองไว้แล้ว เช่น กลุ่มระหว่างทาง/ปลายทาง จะคงสีเดิม)
+       ไม่บังคับพิมพ์สีพื้นหลัง (ไม่ใช้ print-color-adjust:exact) จึงปิดสีได้โดยเอาติ๊ก "กราฟิกพื้นหลัง / Background graphics" ออกในหน้าต่างพิมพ์ */
+    .print-area:not(.cover-page) thead th{
+      background-color:#EEF4FA;
+    }
+
     .roster-page{
       box-sizing:border-box;
       width:194mm;
@@ -8172,6 +8180,22 @@ auth.onAuthStateChanged(function(u){
         var areas = doc.querySelectorAll(".print-area");
         for (var j = 0; j < areas.length; j++){
           if (!areas[j].hasAttribute("data-pdf-cur")) areas[j].parentNode.removeChild(areas[j]);
+        }
+        /* แก้หัวตารางเพี้ยน/ข้อความหาย (เลขที่, เลขประจำตัว, ชื่อ-นามสกุล, รวม ฯลฯ) ในไฟล์ PDF จากมือถือ:
+           html2canvas วาดสีพื้นของแถวหัวตารางแถวที่ 2 ทับข้อความของช่องที่ merge แถว (rowspan) จากแถวที่ 1
+           จึงย้ายสีพื้นจาก <tr> ไปใส่ที่ช่อง <th> แต่ละช่องแทน (ช่องที่มีสีของตัวเองอยู่แล้วคงเดิม) แล้วเอาสีออกจาก <tr> */
+        var headRows = doc.querySelectorAll(".print-area thead tr");
+        for (var h = 0; h < headRows.length; h++){
+          var tr = headRows[h];
+          var rowBg = tr.style.backgroundColor || tr.style.background;
+          if (!rowBg) continue;
+          for (var c = 0; c < tr.children.length; c++){
+            var cell = tr.children[c];
+            /* ช่องที่มีสีพื้นของตัวเองอยู่แล้ว (จาก style หรือ CSS หัวตาราง) คงสีเดิม — เติมเฉพาะช่องที่ยังโปร่งใส */
+            var cellBg = doc.defaultView.getComputedStyle(cell).backgroundColor;
+            if (!cellBg || cellBg === "transparent" || cellBg === "rgba(0, 0, 0, 0)") cell.style.backgroundColor = rowBg;
+          }
+          tr.style.background = "none";
         }
       }
     }).then(function(canvas){ el.removeAttribute("data-pdf-cur"); return canvas; },
