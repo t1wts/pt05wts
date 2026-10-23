@@ -6309,7 +6309,6 @@ function renderYearSummaryPrintPage(yr, ys, info, pageNum){
       '<th style="border:1px solid #333; padding:1.5px; width:70px;">อ่านฯ เขียน</th>' +
       '<th style="border:1px solid #333; padding:1.5px; width:60px;">สถานะ</th>' +
     '</tr></thead><tbody>'+rows+'</tbody></table>' +
-    '<div style="margin-top:10px; font-size:16px;">เกรดเฉลี่ยของห้อง (ทั้งปี): '+(ys.classAverage!==null?ys.classAverage:"-")+'</div>' +
   '</div>';
 }
 
@@ -6664,7 +6663,7 @@ function renderPrintAreas(s, comp){
       '<th style="width:60px;">คุณลักษณะ</th><th style="width:70px;">อ่านฯ เขียน</th>' +
       '<th style="width:55px;">สถานะ</th>' +
     '</tr></thead><tbody>'+summaryRows+'</tbody></table>' +
-    '<div style="margin-top:6px; font-size:16px;">เกรดเฉลี่ยของห้อง: '+(comp.classAverage!==null?comp.classAverage:"-")+'</div>' +
+    (isYearOnlyGradeLevel(s) ? '' : '<div style="margin-top:6px; font-size:16px;">เกรดเฉลี่ยของห้อง: '+(comp.classAverage!==null?comp.classAverage:"-")+'</div>') +
   '</div>';
 }
 
