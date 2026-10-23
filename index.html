@@ -1295,7 +1295,7 @@ function computeYearSummary(yr){
        (ต่างจากกรณี "ย้าย" กลางเทอม 2 ซึ่งเทอม 1 เรียนจบสมบูรณ์แล้ว คะแนนเทอม 1 จึงยังคงใช้ได้ตามปกติ — ไม่ต้องบล็อก) */
     var isYearMs = (yearStatus === "มส");
     /* มส อัตโนมัติจากเวลาเรียนรวมทั้งปี: คะแนนว่าง แต่ยังแสดงเวลาเรียนไว้ เพื่อให้เห็นเหตุผลที่ติด มส */
-    var hideAtt = isYearMs && !autoYearMs;
+    var hideAtt = false; /* มส (ไม่ว่าอัตโนมัติหรือครูตั้งเอง): แสดงเวลาเรียนไว้เสมอ ส่วนคะแนนว่าง */
 
     var notes = [];
     if (r1 && r1.resultStatus) notes.push("เทอม1: "+r1.resultStatus);
@@ -1316,7 +1316,7 @@ function computeYearSummary(yr){
     if (autoYearMs) notes.push("มส อัตโนมัติ — เวลาเรียนรวม 2 เทอม "+attPercent+"% (ต่ำกว่า "+YEAR_MS_ATT_PERCENT+"%)");
     else if (isYearMs) notes.push("ติด มส ประจำปี — คะแนนว่างจนกว่าจะแก้ มส เสร็จ");
     return {
-      no: idx+1,
+      no: idx+1, key: k,
       sid: (r1 && r1.sid) || (r2 && r2.sid) || "",
       name: (r1 && r1.name) || (r2 && r2.name) || "",
       attPercent: hideAtt ? null : attPercent,
@@ -1690,7 +1690,8 @@ function updateStudent(id, field, value){
 function updateStudentStatus(id, value){
   var s = getSubj();
   var st = s.students.find(function(x){ return x.id === id; });
-  if (st) st.resultStatus = value;
+  /* สถานะ "ย้าย" ตั้งได้เฉพาะที่หน้าเวลาเรียน (เลือก "ย้ายตั้งแต่") — เมนูคะแนนไม่เปลี่ยนสถานะของคนที่ย้ายแล้ว และไม่ตั้ง ย้าย ให้ */
+  if (st && st.resultStatus !== "ย้าย" && value !== "ย้าย") st.resultStatus = value;
   scheduleSave(); rerender();
 }
 /* ค่าพิเศษของ "ย้ายตั้งแต่": ย้ายตั้งแต่วันแรก (ไม่ได้มาเรียนเลยแม้แต่วันเดียว) */
@@ -4189,7 +4190,8 @@ function computeSubject(s){
     var resultStatus = manualStatus === "ย้าย" ? "ย้าย" : (manualStatus === "มส" || autoMs) ? "มส" : manualStatus;
     var isTransfer = resultStatus === "ย้าย";
     var isMs = resultStatus === "มส";
-    var blankFields = isTransfer || isMs; // เวลาเรียน/คะแนน ว่างสำหรับนักเรียนย้ายและ มส
+    var blankFields = isTransfer || isMs; // คะแนน ว่างสำหรับนักเรียนย้ายและ มส
+    var blankAtt = isTransfer;            // เวลาเรียน ว่างเฉพาะนักเรียนย้าย — นักเรียน มส ยังแสดงเวลาเรียนไว้ให้เห็นเหตุผล
 
     var grade = blankFields ? null : gradeRaw;
     var total = blankFields ? null : (hasAnyScore ? totalRaw : null);
@@ -4199,12 +4201,12 @@ function computeSubject(s){
     var readWriteLevelText = isMs ? "ไม่ผ่าน" : (blankFields ? null : rw.levelText);
 
     return Object.assign({}, st, {
-      hoursEarned: blankFields ? null : hoursEarnedRaw,
-      attPercent: blankFields ? null : attPercentRaw,
-      lowAttendanceWarn: termPrimaryRow && lowAttendanceRaw && !blankFields, /* ประถม: เวลาเรียนเทอมนี้ < 80% (รอรวมทั้งปี) */
-      absentCount: blankFields ? null : absentCountRaw,
-      leaveCount: blankFields ? null : leaveCountRaw,
-      sickCount: blankFields ? null : sickCountRaw,
+      hoursEarned: blankAtt ? null : hoursEarnedRaw,
+      attPercent: blankAtt ? null : attPercentRaw,
+      lowAttendanceWarn: termPrimaryRow && lowAttendanceRaw && !blankAtt && !isMs, /* ประถม: เวลาเรียนเทอมนี้ < 80% (รอรวมทั้งปี) */
+      absentCount: blankAtt ? null : absentCountRaw,
+      leaveCount: blankAtt ? null : leaveCountRaw,
+      sickCount: blankAtt ? null : sickCountRaw,
       collectSum: blankFields ? null : collectSumRaw,
       collectBeforeSum: (blankFields || !beforeMaxDef) ? null : collectBeforeSumRaw,
       collectAfterSum: (blankFields || !afterMaxDef) ? null : collectAfterSumRaw,
@@ -4747,9 +4749,19 @@ function renderAttendance(s, comp){
         return '<option value="'+sess.id+'" '+(sess.id===transferSessionId?"selected":"")+'>'+esc(sess.day||"-")+' '+esc(sess.month.slice(0,3))+'</option>';
       }).join("") +
     '</select>';
+    /* สถานะผลการเรียน (ปกติ / ร / มส / ย้าย) ตั้งที่หน้านี้ที่เดียว — "ย้าย" ตั้งผ่านช่อง "ย้ายตั้งแต่" ข้างหน้า (หน้าคะแนนแสดงอย่างเดียว) */
+    var isMoved = r.manualStatus === "ย้าย";
+    var statusSelect = '<select style="width:100%; border:1px solid var(--line); border-radius:4px; padding:3px 2px; font-size:12.5px; background:white;" onchange="updateStudentStatus(\''+r.id+'\',this.value)"'+(isMoved?' disabled title="สถานะ ย้าย ตั้งที่ช่อง ย้ายตั้งแต่ (ข้างหน้านี้)"':'')+'>' +
+      (isMoved
+        ? '<option value="ย้าย" selected>ย้าย</option>'
+        : '<option value="" '+(r.manualStatus===""?"selected":"")+'>ปกติ</option>' +
+          '<option value="ร" '+(r.manualStatus==="ร"?"selected":"")+'>ร (รอ)</option>' +
+          '<option value="มส" '+(r.manualStatus==="มส"?"selected":"")+'>มส (ไม่มีสิทธิ์)</option>') +
+    '</select>' + (r.resultStatus==="มส" && r.manualStatus==="" ? '<div style="font-size:11px; color:var(--gray); margin-top:2px;">อัตโนมัติ: เวลาเรียน &lt;80%</div>' : '');
     return '<tr><td style="text-align:center; position:sticky; left:0; z-index:2; background:white; box-shadow:2px 0 4px rgba(0,0,0,0.08);">'+r.no+'</td><td style="position:sticky; left:40px; z-index:2; background:white; box-shadow:2px 0 4px rgba(0,0,0,0.08);">'+(esc(r.name)||'<em style="color:var(--gray);">(ยังไม่ระบุชื่อ)</em>')+(r.resultStatus?(' <span style="font-size:11px; color:var(--red);">('+esc(r.resultStatus)+')</span>'):'')+(r.lowAttendanceWarn?(' <span style="font-size:11px; color:#C26A00;" title="ระดับประถม: ยังไม่ตัด มส รายเทอม — ระบบจะรวมเวลาเรียน 2 เทอมที่หน้าสรุปปีการศึกษา">⚠ เวลาเรียนเทอมนี้ต่ำกว่า 80%</span>'):'')+'</td>' + cells +
       '<td style="text-align:center; font-weight:700;">'+(r.hoursEarned!==null?r.hoursEarned:"-")+'</td><td style="text-align:center; font-weight:700;'+(r.lowAttendanceWarn?' color:#C26A00;':'')+'">'+(r.attPercent!==null?r.attPercent:"-")+'</td>' +
-      '<td style="text-align:center; padding:3px 4px;">'+transferSelect+'</td></tr>';
+      '<td style="text-align:center; padding:3px 4px;">'+transferSelect+'</td>' +
+      '<td style="text-align:center; padding:3px 4px;">'+statusSelect+'</td></tr>';
   }).join("");
 
   var holidaySessions = s.sessions.filter(function(x){ return x.holiday; });
@@ -4757,10 +4769,10 @@ function renderAttendance(s, comp){
   var holidayCount = holidaySessions.length;
   var teachingCount = teachingSessions.length;
 
-  var attTableWidth = 490 + s.sessions.length*56;
+  var attTableWidth = 610 + s.sessions.length*56;
   return '' +
   '<div class="section-title">บันทึกเวลาเรียน</div>' +
-  '<div class="section-sub">กำหนดวันเรียน เดือน และวันหยุดพิเศษได้เอง แล้วคลิกในตารางเพื่อบันทึกการมาเรียน · กำหนดตายตัวว่า 1 วัน = 1 ชั่วโมงเสมอ ถ้าวิชานี้เรียนวันเดิม 2 ชั่วโมงขึ้นไป ให้กดปุ่ม "+" ที่ท้ายแถวเพื่อสร้างวันซ้ำ (วันที่เดิม) แทนการเพิ่มจำนวนชั่วโมงในแถวเดียว · เลื่อนตารางด้านล่างไปทางขวาได้ทั้งจากแถบเลื่อนด้านบนหรือด้านล่างตาราง · เลือก "ย้ายตั้งแต่" (เลือกได้ตั้งแต่ "ย้ายตั้งแต่วันแรก") ในตารางด้านล่างแล้วระบบจะตั้งสถานะเป็น "ย้าย" ให้อัตโนมัติในแท็บคะแนน · '+(isYearOnlyGradeLevel(s)
+  '<div class="section-sub">กำหนดวันเรียน เดือน และวันหยุดพิเศษได้เอง แล้วคลิกในตารางเพื่อบันทึกการมาเรียน · กำหนดตายตัวว่า 1 วัน = 1 ชั่วโมงเสมอ ถ้าวิชานี้เรียนวันเดิม 2 ชั่วโมงขึ้นไป ให้กดปุ่ม "+" ที่ท้ายแถวเพื่อสร้างวันซ้ำ (วันที่เดิม) แทนการเพิ่มจำนวนชั่วโมงในแถวเดียว · เลื่อนตารางด้านล่างไปทางขวาได้ทั้งจากแถบเลื่อนด้านบนหรือด้านล่างตาราง · เลือก "ย้ายตั้งแต่" (เลือกได้ตั้งแต่ "ย้ายตั้งแต่วันแรก") ในตารางด้านล่างแล้วระบบจะตั้งสถานะเป็น "ย้าย" ให้อัตโนมัติ · ช่อง "สถานะ" (ปกติ/ร/มส) ก็ตั้งที่ตารางนี้ที่เดียว แท็บคะแนนแสดงสถานะอย่างเดียว · '+(isYearOnlyGradeLevel(s)
       ? 'ระดับประถมศึกษา: ไม่ตัด "มส" รายเทอม ถ้าเวลาเรียนเทอมนี้ต่ำกว่า 80% จะขึ้น ⚠ เตือนไว้เฉย ๆ — ระบบรวมเวลาเรียน 2 เทอมแล้วตัด "มส" ที่หน้าสรุปปีการศึกษา (ครูตั้ง "มส" ด้วยมือในแท็บคะแนนได้เอง)'
       : 'นักเรียนที่เวลาเรียนต่ำกว่า 80% จะได้สถานะ "มส" ให้อัตโนมัติในแท็บคะแนนเช่นกัน')+'</div>' +
   '<div style="display:flex; align-items:center; gap:18px; margin-bottom:16px; flex-wrap:wrap;">' +
@@ -4824,7 +4836,7 @@ function renderAttendance(s, comp){
   '<div id="attScrollTop" class="table-scroll" style="height:16px; overflow-y:hidden;" onscroll="syncScrollLeft(\'attScrollTop\',\'attScrollBottom\')"><div style="width:'+attTableWidth+'px; height:1px;"></div></div>' +
   '<div id="attScrollBottom" class="table-scroll drag-scroll" tabindex="0" title="ลากเมาส์ค้าง หรือโฟกัสแล้วกดลูกศรซ้าย-ขวา เพื่อเลื่อนดูวันเรียนถัดไป" onmousedown="startDragScroll(event,\'attScrollBottom\',\'attScrollTop\')" onkeydown="handleScrollAreaKeydown(event,\'attScrollBottom\',\'attScrollTop\')" onscroll="syncScrollLeft(\'attScrollBottom\',\'attScrollTop\')"><table class="ptable" style="min-width:'+attTableWidth+'px;"><thead><tr>' +
     '<th style="width:40px; position:sticky; left:0; z-index:3; background:#F1EEE6; box-shadow:2px 0 4px rgba(0,0,0,0.08);">เลขที่</th><th style="width:200px; position:sticky; left:40px; z-index:3; background:#F1EEE6; box-shadow:2px 0 4px rgba(0,0,0,0.08);">ชื่อ - นามสกุล</th>' + headerCols +
-    '<th style="width:70px;">ชม.ที่มา</th><th style="width:60px;">%</th><th style="width:90px;">ย้ายตั้งแต่</th>' +
+    '<th style="width:70px;">ชม.ที่มา</th><th style="width:60px;">%</th><th style="width:90px;">ย้ายตั้งแต่</th><th style="width:120px;">สถานะ</th>' +
   '</tr></thead><tbody>'+bodyRows+'</tbody></table></div>';
 }
 
@@ -5566,12 +5578,8 @@ function renderScores(s, comp){
       '<td style="text-align:center; font-weight:600;">'+(r.finalGroupSum !== null && r.finalGroupSum !== undefined ? r.finalGroupSum : "-")+'</td>' +
       '<td style="text-align:center; font-weight:700;">'+(r.total !== null ? r.total : "-")+'</td>' +
       '<td style="text-align:center; font-weight:700; color:var(--ink);">'+(r.grade !== null ? r.grade : "-")+'</td>' +
-      '<td style="text-align:center; padding:3px 2px;"><select style="width:100%; border:1px solid var(--line); border-radius:4px; padding:3px 2px; font-size:13px; background:white;" onchange="updateStudentStatus(\''+r.id+'\',this.value)">' +
-        '<option value="" '+(r.manualStatus===""?"selected":"")+'>ปกติ</option>' +
-        '<option value="ร" '+(r.manualStatus==="ร"?"selected":"")+'>ร (รอ)</option>' +
-        '<option value="มส" '+(r.manualStatus==="มส"?"selected":"")+'>มส (ไม่มีสิทธิ์)</option>' +
-        '<option value="ย้าย" '+(r.manualStatus==="ย้าย"?"selected":"")+'>ย้าย (ย้ายออก)</option>' +
-      '</select>' + (r.resultStatus==="มส" && r.manualStatus==="" ? '<div style="font-size:11px; color:var(--gray); margin-top:2px;">อัตโนมัติ: เวลาเรียน &lt;80%</div>' : '') + '</td></tr>';
+      '<td style="text-align:center; padding:3px 2px; font-weight:600;'+(r.resultStatus?' color:var(--red);':'')+'" title="สถานะตั้งได้ที่หน้าเวลาเรียนเท่านั้น">'+(r.resultStatus ? esc(r.resultStatus) : "ปกติ") +
+        (r.resultStatus==="มส" && r.manualStatus==="" ? '<div style="font-size:11px; font-weight:400; color:var(--gray); margin-top:2px;">อัตโนมัติ: เวลาเรียน &lt;80%</div>' : '') + '</td></tr>';
   }).join("");
 
   var scoreTableWidth = 900 + s.structure.length*100;
@@ -6260,7 +6268,7 @@ function renderYearSummaryPrintPage(yr, ys, info, pageNum){
   var subj2 = ys.subj2;
   var ratio2 = scoreRatioFor(subj2);
   var rows = ys.rows.map(function(r){
-    return '<tr>' +
+    return blankDashCells('<tr>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-size:14px;">'+r.no+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-size:14px;">'+esc(r.sid)+'</td>' +
       '<td style="border:1px solid #333; padding:1.5px 6px; white-space:nowrap; font-size:14px;">'+esc(r.name)+'</td>' +
@@ -6272,7 +6280,7 @@ function renderYearSummaryPrintPage(yr, ys, info, pageNum){
       '<td style="border:1px solid #333; text-align:center; padding:1.5px;">'+(r.desirableLevelText||"-")+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px;">'+(r.readWriteLevelText||"-")+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px;">'+(r.yearStatus ? esc(r.yearStatus) : "ปกติ")+'</td>' +
-    '</tr>';
+    '</tr>', r.yearStatus === "มส");
   }).join("");
   for (var i = ys.rows.length; i < SCORE_PRINT_PAD_ROWS; i++){
     rows += '<tr>' +
@@ -6334,6 +6342,28 @@ function renderYearTermDetailPages(s, comp, info, startPageNum){
              รายละเอียดคะแนนเทอม 2 (ชุดเดียวกัน) → สรุปผล 2 ภาค → โครงสร้างรายวิชาเทอม 1 → โครงสร้างรายวิชาเทอม 2
    ทุกหน้ายกเว้นปก/รายชื่อ/สรุปผล ใช้ฟังก์ชันพิมพ์ตัวเดียวกับรายเทอม เรียกด้วยข้อมูลจริงของเทอม 1/เทอม 2 ที่เลือกไว้
    — ไม่กระทบหรือแก้ไขข้อมูล/ฟังก์ชันพิมพ์ของรายเทอมใด ๆ ---- */
+/* เล่มสรุปรายปี: นักเรียนที่รวมเวลาเรียน 2 เทอมแล้วติด มส → หน้ารายเทอมทุกหน้าที่มีคอลัมน์สถานะต้องขึ้น "มส" และคะแนนเป็นช่องว่าง
+   ทำเป็นสำเนาสำหรับพิมพ์เท่านั้น (ไม่แก้ข้อมูลจริง) — ข้อมูลเวลาเรียน (ชั่วโมง/ขาด/ลา/ป่วย) คงไว้เพื่อให้เห็นเหตุผล */
+function applyYearMsToComp(comp, ys){
+  var ms = {};
+  ys.rows.forEach(function(r){ if (r.yearStatus === "มส") ms[r.key] = true; });
+  if (!Object.keys(ms).length) return comp;
+  var rows = comp.rows.map(function(r){
+    var k = (r.sid && String(r.sid).trim()) ? ("sid:"+String(r.sid).trim()) : ("name:"+String(r.name||"").trim());
+    if (!ms[k] || r.isTransfer) return r;
+    return Object.assign({}, r, {
+      resultStatus:"มส", gradeBucket:"มส", yearMsBlank:true,
+      collectSum:null, collectBeforeSum:null, collectAfterSum:null, midtermSum:null, finalSum:null,
+      makeupScore:null, makeupMidScore:null, collectPlusMidterm:null, examSum:null, interimSum:null, finalGroupSum:null,
+      total:null, grade:null, desirableAvg:null, readWriteAvg:null,
+      desirableLevelText:"ไม่ผ่าน", readWriteLevelText:"ไม่ผ่าน"
+    });
+  });
+  return Object.assign({}, comp, { rows: rows });
+}
+/* แถวที่ติด มส จากการรวมเวลาเรียนทั้งปี: ช่อง "-" ในแถวนั้นให้เป็นช่องว่าง */
+function blankDashCells(html, on){ return on ? html.replace(/>-<\/td>/g, '></td>') : html; }
+
 function renderYearPrintAreas(){
   var yr = getYearRecord();
   if (!yr || !yr.term1Id || !yr.term2Id) return "";
@@ -6341,7 +6371,7 @@ function renderYearPrintAreas(){
   if (!ys) return "";
   var info = DB.schoolInfo;
   var subj1 = ys.subj1, subj2 = ys.subj2;
-  var comp1 = computeSubject(subj1), comp2 = computeSubject(subj2);
+  var comp1 = applyYearMsToComp(computeSubject(subj1), ys), comp2 = applyYearMsToComp(computeSubject(subj2), ys);
 
   /* หน้าเวลาเรียนของรายเทอมไม่มีป้าย "ภาคเรียนที่ X" ในตัวเอง (เพราะปกติพิมพ์แยกเล่มต่อเทอมอยู่แล้ว)
      ในเล่มปีการศึกษาที่แสดงทั้ง 2 เทอมต่อกัน จึงทำสำเนาแสดงผลชั่วคราว (ไม่บันทึกกลับ ไม่กระทบข้อมูลจริง)
@@ -6647,7 +6677,7 @@ function renderTotalScorePrintPage(s, comp, pageNum, breakAfter, hideGrade){
       '<td style="border:1px solid #333; text-align:center; padding:1.5px;">'+(r.hasMakeupMid && r.makeupMidScore!==null && r.makeupMidScore!==undefined ?r.makeupMidScore:"-")+'</td>';
   };
   var rows = comp.rows.map(function(r){
-    return '<tr>' +
+    return blankDashCells('<tr>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-size:14px;">'+r.no+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-size:14px;">'+esc(r.sid)+'</td>' +
       '<td style="border:1px solid #333; padding:1.5px 6px; white-space:nowrap; font-size:14px;">'+esc(r.name)+'</td>' +
@@ -6663,7 +6693,7 @@ function renderTotalScorePrintPage(s, comp, pageNum, breakAfter, hideGrade){
       '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-weight:700; background:#F7F5EE;">'+(r.total!==null?r.total:"-")+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-weight:700; background:#F7F5EE;">'+(hideGrade ? "" : (r.grade!==null?r.grade:"-"))+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px;">'+(r.resultStatus ? esc(r.resultStatus) : "ปกติ")+'</td>' +
-    '</tr>';
+    '</tr>', r.yearMsBlank);
   }).join("");
   for (var tsIdx = comp.rows.length; tsIdx < SCORE_PRINT_PAD_ROWS; tsIdx++){
     rows += '<tr>' +
@@ -6920,7 +6950,7 @@ function renderExamScorePrintPage(s, comp, info, midtermItems, finalItems, pageN
     }
     var makeupVal = (!rowBlank && sc.makeup !== undefined && sc.makeup !== "") ? sc.makeup : "";
     var makeupMidVal = (!rowBlank && sc.makeupMid !== undefined && sc.makeupMid !== "") ? sc.makeupMid : "";
-    return '<tr>' +
+    return blankDashCells('<tr>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-size:14px;">'+r.no+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-size:14px;">'+esc(r.sid)+'</td>' +
       '<td style="border:1px solid #333; padding:1.5px 6px; white-space:nowrap; font-size:14px;">'+esc(r.name)+'</td>' +
@@ -6930,7 +6960,7 @@ function renderExamScorePrintPage(s, comp, info, midtermItems, finalItems, pageN
       cellsFor(finalItems) +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-weight:700;">'+(r.finalSum!==null?r.finalSum:"-")+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px;">'+(makeupVal!==""?esc(makeupVal):"-")+'</td>' +
-    '</tr>';
+    '</tr>', r.yearMsBlank);
   }).join("");
   var examBlankCols = midtermItems.length + finalItems.length + 4;
   for (var exIdx = comp.rows.length; exIdx < SCORE_PRINT_PAD_ROWS; exIdx++){
@@ -7068,7 +7098,7 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
   var chunks = [];
   for (var i=0;i<sessions.length;i+=CHUNK_SIZE) chunks.push(sessions.slice(i, i+CHUNK_SIZE));
   if (!chunks.length) chunks = [[]];
-  /* ระดับประถมศึกษา: หน้าพิมพ์เวลาเรียนรายเทอมไม่แสดงคอลัมน์ร้อยละ (ไปสรุปรวม 2 เทอมที่หน้าสรุปเวลาเรียนตลอดปี) */
+  /* ระดับประถมศึกษา: หน้าพิมพ์เวลาเรียนรายเทอมไม่แสดงคอลัมน์ร้อยละและสถานะ (ไปสรุปรวม 2 เทอมที่หน้าสรุปเวลาเรียนตลอดปี) */
   var hidePctCol = isYearOnlyGradeLevel(s);
 
   /* คำนวณ "ชั่วโมงที่เท่าไหร่" สะสมของแต่ละวันเรียน (ไม่นับวันหยุด) ล่วงหน้าครั้งเดียวสำหรับทั้งวิชา
@@ -7171,7 +7201,7 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
           '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (sickCount || "-") + '</td>' +
           '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center; font-weight:700;">' + (r.hoursEarned!==null?r.hoursEarned:"-") + '</td>' +
           (hidePctCol ? '' : '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + (r.attPercent!==null?r.attPercent:"-") + '</td>') +
-          '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + statusLabel + '</td>';
+          (hidePctCol ? '' : '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center;">' + statusLabel + '</td>');
       }
 
       var rowHtml = '<tr>' +
@@ -7188,7 +7218,7 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
         if (sess.holiday) return holidaySessionCell(sess);
         return '<td style="border:1px solid #333; padding:1.5px 2px;"></td>';
       }).join("");
-      var padSummaryCells = isLastChunk ? Array(hidePctCol ? 5 : 6).fill('<td style="border:1px solid #333; padding:1.5px 2px;"></td>').join('') : "";
+      var padSummaryCells = isLastChunk ? Array(hidePctCol ? 4 : 6).fill('<td style="border:1px solid #333; padding:1.5px 2px;"></td>').join('') : "";
       bodyRows += '<tr>' +
         '<td style="border:1px solid #333; padding:1.5px 2px; text-align:center; font-size:14px;">' + (rIdx+1) + '</td>' +
         '<td style="border:1px solid #333; padding:1.5px 4px;">&nbsp;</td>' +
@@ -7203,7 +7233,7 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
       '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:26px;">ป่วย</th>' +
       '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:40px;">รวม<br/>(ชม.)</th>' +
       (hidePctCol ? '' : '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:36px;">ร้อยละ</th>') +
-      '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:40px;">สถานะ</th>'
+      (hidePctCol ? '' : '<th rowspan="2" style="border:1px solid #333; padding:1.5px 2px; width:40px;">สถานะ</th>')
       : "";
 
     var pageNum = startPageNum + chunkIndex;
