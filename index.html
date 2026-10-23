@@ -6361,8 +6361,8 @@ function applyYearMsToComp(comp, ys){
   });
   return Object.assign({}, comp, { rows: rows });
 }
-/* แถวที่ติด มส จากการรวมเวลาเรียนทั้งปี: ช่อง "-" ในแถวนั้นให้เป็นช่องว่าง */
-function blankDashCells(html, on){ return on ? html.replace(/>-<\/td>/g, '></td>') : html; }
+/* (เลิกใช้) เดิมทำช่อง "-" ของแถว มส ให้ว่าง */
+function blankDashCells(html, on){ return html; } /* เดิมเปลี่ยน "-" เป็นช่องว่าง — ตอนนี้ให้พิมพ์ "-" ในช่องที่ไม่มีข้อมูลทั้งหมด จึงไม่แก้อะไร */
 
 function renderYearPrintAreas(){
   var yr = getYearRecord();
@@ -6691,7 +6691,7 @@ function renderTotalScorePrintPage(s, comp, pageNum, breakAfter, hideGrade){
       '<td style="border:1px solid #333; text-align:center; padding:1.5px;">'+(r.hasMakeup && r.makeupScore!==null && r.makeupScore!==undefined ?r.makeupScore:"-")+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-weight:700;">'+(r.finalGroupSum!==null?r.finalGroupSum:"-")+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-weight:700; background:#F7F5EE;">'+(r.total!==null?r.total:"-")+'</td>' +
-      '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-weight:700; background:#F7F5EE;">'+(hideGrade ? "" : (r.grade!==null?r.grade:"-"))+'</td>' +
+      '<td style="border:1px solid #333; text-align:center; padding:1.5px; font-weight:700; background:#F7F5EE;">'+(hideGrade ? "-" : (r.grade!==null?r.grade:"-"))+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1.5px;">'+(r.resultStatus ? esc(r.resultStatus) : "ปกติ")+'</td>' +
     '</tr>', r.yearMsBlank);
   }).join("");
@@ -6850,11 +6850,11 @@ function scoreDetailRows(s, comp, items, sumKey, fillerColCount){
     var sumVal = r[sumKey];
     var rowBlank = (sumVal === null || sumVal === undefined);
     var cells = items.map(function(it){
-      if (rowBlank) return '<td style="border:1px solid #333; text-align:center; padding:1px;"></td>';
+      if (rowBlank) return '<td style="border:1px solid #333; text-align:center; padding:1px;">-</td>';
       /* ตัวชี้วัดที่ไม่ได้กำหนดคะแนนเต็มไว้ แสดง "-" */
       if (!(Number(it.max) > 0)) return '<td style="border:1px solid #333; text-align:center; padding:1px;">-</td>';
       var val = sc.items[it.id];
-      return '<td style="border:1px solid #333; text-align:center; padding:1px;">'+(val!==undefined && val!==""?esc(val):"")+'</td>';
+      return '<td style="border:1px solid #333; text-align:center; padding:1px;">'+(val!==undefined && val!==""?esc(val):"-")+'</td>';
     }).join("");
     return '<tr><td style="border:1px solid #333; text-align:center; padding:2px; font-size:14px;">'+r.no+'</td>' +
       '<td style="border:1px solid #333; text-align:center; padding:1px; font-size:14px;">'+esc(r.sid)+'</td>' +
@@ -6941,11 +6941,11 @@ function renderExamScorePrintPage(s, comp, info, midtermItems, finalItems, pageN
     var rowBlank = (r.examSum === null || r.examSum === undefined);
     function cellsFor(items){
       return items.map(function(it){
-        if (rowBlank) return '<td style="border:1px solid #333; text-align:center; padding:1.5px;"></td>';
+        if (rowBlank) return '<td style="border:1px solid #333; text-align:center; padding:1.5px;">-</td>';
         /* ตัวชี้วัดที่ไม่ได้กำหนดคะแนนเต็มไว้ (เช่น ไม่มีสอบกลางภาค) แสดง "-" */
         if (!(Number(it.max) > 0)) return '<td style="border:1px solid #333; text-align:center; padding:1.5px;">-</td>';
         var val = sc.items[it.id];
-        return '<td style="border:1px solid #333; text-align:center; padding:1.5px;">'+(val!==undefined && val!==""?esc(val):"")+'</td>';
+        return '<td style="border:1px solid #333; text-align:center; padding:1.5px;">'+(val!==undefined && val!==""?esc(val):"-")+'</td>';
       }).join("");
     }
     var makeupVal = (!rowBlank && sc.makeup !== undefined && sc.makeup !== "") ? sc.makeup : "";
@@ -7008,14 +7008,14 @@ function renderQualityPrintPage(s, comp, pageNum, breakAfter){
     var rwSc = s.readWriteScores[r.id] || {};
     var rowBlank = r.isTransfer || r.resultStatus === "มส";
     var desCells = desItems.map(function(it){
-      if (rowBlank) return '<td style="border:1px solid #333; text-align:center; padding:1px;"></td>';
+      if (rowBlank) return '<td style="border:1px solid #333; text-align:center; padding:1px;">-</td>';
       var val = desSc[it.id];
-      return '<td style="border:1px solid #333; text-align:center; padding:1px;">'+(val!==undefined && val!==""?esc(val):"")+'</td>';
+      return '<td style="border:1px solid #333; text-align:center; padding:1px;">'+(val!==undefined && val!==""?esc(val):"-")+'</td>';
     }).join("");
     var rwCells = rwItems.map(function(it){
-      if (rowBlank) return '<td style="border:1px solid #333; text-align:center; padding:1px;"></td>';
+      if (rowBlank) return '<td style="border:1px solid #333; text-align:center; padding:1px;">-</td>';
       var val = rwSc[it.id];
-      return '<td style="border:1px solid #333; text-align:center; padding:1px;">'+(val!==undefined && val!==""?esc(val):"")+'</td>';
+      return '<td style="border:1px solid #333; text-align:center; padding:1px;">'+(val!==undefined && val!==""?esc(val):"-")+'</td>';
     }).join("");
     return '<tr><td style="border:1px solid #333; text-align:center; padding:2px; font-size:14px;">'+r.no+'</td>' +
       '<td style="border:1px solid #333; padding:1px 6px; white-space:nowrap; font-size:14px;">'+esc(r.name)+'</td>' +
@@ -7173,7 +7173,7 @@ function renderAttendancePrintPage(s, comp, info, startPageNum, startHour){
       var cells = chunkSessions.map(function(sess){
         if (sess.holiday) return holidaySessionCell(sess);
         var globalIdx = sessions.indexOf(sess);
-        if (transferIndex !== -1 && globalIdx > transferIndex) return '<td style="border:1px solid #333; padding:1.5px 2px; background:#F4F4F4;"></td>';
+        if (transferIndex !== -1 && globalIdx > transferIndex) return '<td style="border:1px solid #333; padding:1.5px 2px; background:#F4F4F4; text-align:center;">-</td>';
         var st = att[sess.id];
         var label = st === "absent" ? "ข" : st === "late" ? "ส" : st === "leave" ? "ล" : st === "sick" ? "ป" : "/";
         var isMark = (st === "absent" || st === "late" || st === "leave" || st === "sick");
