@@ -1147,26 +1147,91 @@ function handleScrollAreaKeydown(ev, id, pairId){
 }
 
 /* ================= mutation functions (called from inline handlers) ================= */
-function setTab(t){ UI.tab = t; UI.sidebarOpen = false; rerender(); }
+function setTab(t){ UI.tab = t; UI.sidebarOpen = false; if (t === "yeargrade") syncYearFromRecord(); else syncYearFromSubject(); rerender(); }
 function toggleSidebar(){ UI.sidebarOpen = !UI.sidebarOpen; rerender(); }
 function closeSidebar(){ UI.sidebarOpen = false; rerender(); }
 
-function updateSchoolInfo(field, value){ DB.schoolInfo[field] = value; scheduleSave(); rerender(); }
+function updateSchoolInfo(field, value){ DB.schoolInfo[field] = value; if (field === "academicYear"){ var cs = getSubj(); if (cs) cs.year = String(value || "").trim(); } scheduleSave(); rerender(); }
 function updateSubjectField(field, value){ getSubj()[field] = value; getSubj().updatedAt = Date.now(); scheduleSave(); rerender(); }
 
+/* ================= หมวดของวิชา: แยกตามปีการศึกษา + ภาคเรียน =================
+   วิชาแต่ละวิชามี s.year (ปีการศึกษา) และ s.term (ภาคเรียน) — แถบด้านซ้ายกรอง/จัดกลุ่มรายการวิชาตามสองค่านี้
+   ช่อง "ปีการศึกษา" ที่หน้าปกเป็นค่ากลางของทั้งระบบ (ใช้คำนวณวันที่/พิมพ์) จึงปรับค่ากลางให้ตรงกับปีของวิชาที่เปิดอยู่ทุกครั้งที่สลับวิชา */
+function subjYear(s){
+  if (!s.year) s.year = String(DB.schoolInfo.academicYear || "").trim(); /* วิชาเก่าที่ยังไม่มีปี → ใช้ปีที่ตั้งไว้เดิม */
+  return String(s.year).trim();
+}
+function subjTermNo(s){ return String(termNumberOnly(s.term) || "").trim(); }
+function syncYearFromSubject(){
+  var s = getSubj();
+  if (!s) return;
+  var y = subjYear(s);
+  if (y) DB.schoolInfo.academicYear = y;
+}
+function matchesCatFilter(s){
+  if (UI.filterYear && subjYear(s) !== UI.filterYear) return false;
+  if (UI.filterTerm && subjTermNo(s) !== UI.filterTerm) return false;
+  return true;
+}
+function catLabel(year, term){
+  return (year ? ("ปีการศึกษา " + year) : "ไม่ระบุปี") + " · " + (term ? ("ภาคเรียนที่ " + term) : "ไม่ระบุภาคเรียน");
+}
+/* อ่านข้อความ "ปี/เทอม" เช่น 2569/1 หรือ 2569 เทอม 2 */
+function parseCategoryInput(txt){
+  var m = String(txt || "").match(/(\d{4})\D+(\d)\b/);
+  if (m) return { year:m[1], term:m[2] };
+  m = String(txt || "").match(/(\d{4})/);
+  return m ? { year:m[1], term:"" } : null;
+}
+function setCatFilter(kind, v){
+  if (kind === "year") UI.filterYear = v; else UI.filterTerm = v;
+  var cur = getSubj();
+  if (!matchesCatFilter(cur)){
+    var first = DB.order.filter(function(id){ return matchesCatFilter(DB.subjects[id]); })[0];
+    if (first){ DB.currentId = first; syncYearFromSubject(); scheduleSave(); }
+  }
+  rerender();
+}
 function createSubject(){
   var name = window.prompt("ตั้งชื่อวิชาใหม่ (เช่น คณิตศาสตร์ ม.3/1)", "");
   if (name === null) return;
+  var cur = getSubj();
+  var defY = UI.filterYear || subjYear(cur) || String(DB.schoolInfo.academicYear || "");
+  var defT = UI.filterTerm || subjTermNo(cur) || "1";
+  var catTxt = window.prompt("วิชานี้อยู่หมวดไหน — ปีการศึกษา/ภาคเรียน (เช่น 2569/1)\n(พิมพ์ปี/เทอมใหม่ได้เลย ระบบจะสร้างหมวดใหม่ให้อัตโนมัติ)", defY + "/" + defT);
+  if (catTxt === null) return;
+  var cat = parseCategoryInput(catTxt) || { year:defY, term:defT };
   var s = newEmptySubject(name.trim() || "วิชาใหม่");
+  s.year = cat.year; s.term = cat.term;
   DB.subjects[s.id] = s;
   DB.order.push(s.id);
   DB.currentId = s.id;
+  syncYearFromSubject();
+  /* ถ้าตัวกรองที่เลือกอยู่ไม่ตรงกับหมวดของวิชาใหม่ ให้ปรับตัวกรองตาม เพื่อให้เห็นวิชาที่เพิ่งสร้าง */
+  if (UI.filterYear && UI.filterYear !== s.year) UI.filterYear = s.year;
+  if (UI.filterTerm && UI.filterTerm !== subjTermNo(s)) UI.filterTerm = subjTermNo(s);
   UI.tab = "cover";
+  scheduleSave(); rerender();
+}
+/* ย้ายวิชาที่เปิดอยู่ไปหมวด (ปีการศึกษา/ภาคเรียน) อื่น */
+function moveSubjectCategory(){
+  var s = getSubj();
+  var txt = window.prompt("ย้ายวิชา \"" + s.label + "\" ไปหมวด — ปีการศึกษา/ภาคเรียน (เช่น 2569/2)", subjYear(s) + "/" + (subjTermNo(s) || "1"));
+  if (txt === null) return;
+  var cat = parseCategoryInput(txt);
+  if (!cat){ window.alert("รูปแบบไม่ถูกต้อง — พิมพ์ปีการศึกษา 4 หลัก แล้วตามด้วยภาคเรียน เช่น 2569/2"); return; }
+  s.year = cat.year;
+  if (cat.term) s.term = cat.term;
+  s.updatedAt = Date.now();
+  syncYearFromSubject();
+  if (UI.filterYear && UI.filterYear !== s.year) UI.filterYear = s.year;
+  if (UI.filterTerm && UI.filterTerm !== subjTermNo(s)) UI.filterTerm = subjTermNo(s);
   scheduleSave(); rerender();
 }
 function switchSubject(id){
   if (!DB.subjects[id]) return;
   DB.currentId = id;
+  syncYearFromSubject();
   scheduleSave(); rerender();
 }
 function renameSubject(){
@@ -1191,18 +1256,68 @@ function duplicateSubject(){
 
 /* ================= ตัดเกรดปีการศึกษา: เชื่อมวิชาเทอม 1 + เทอม 2 มาสรุปเกรดรวมปี (สัดส่วน 50:50) ================= */
 function getYearRecord(){ return DB.yearRecords[DB.currentYearId] || null; }
+/* ชุดตัดเกรดแยกตามปีการศึกษา (ใครปีมัน): ชุดแต่ละชุดมี yr.year — หน้านี้กรองชุดและรายการวิชาตามปีที่เลือก */
+function yrYear(yr){
+  if (!yr.year){
+    var s1 = DB.subjects[yr.term1Id] || DB.subjects[yr.term2Id];
+    yr.year = s1 ? subjYear(s1) : String(DB.schoolInfo.academicYear || "").trim();
+  }
+  return String(yr.year).trim();
+}
+function ygSelectedYear(){
+  if (UI.ygYear !== undefined) return UI.ygYear;
+  var yr = getYearRecord();
+  return yr ? yrYear(yr) : String(DB.schoolInfo.academicYear || "").trim();
+}
+function syncYearFromRecord(){
+  var yr = getYearRecord();
+  if (!yr) return;
+  var y = yrYear(yr);
+  if (y) DB.schoolInfo.academicYear = y; /* ค่ากลางที่ใช้พิมพ์/คำนวณวันที่ ให้ตรงกับปีของชุดที่เปิดอยู่ */
+}
+function setYgYear(y){
+  UI.ygYear = y;
+  var cur = getYearRecord();
+  if (!cur || (y && yrYear(cur) !== y)){
+    var first = DB.yearOrder.filter(function(id){ return DB.yearRecords[id] && (!y || yrYear(DB.yearRecords[id]) === y); })[0];
+    DB.currentYearId = first || null;
+  }
+  syncYearFromRecord();
+  scheduleSave(); rerender();
+}
 function createYearRecord(){
-  var name = window.prompt("ตั้งชื่อชุดตัดเกรดปีการศึกษา (เช่น คณิตศาสตร์ ป.4/1 ปีการศึกษา 2568)", "");
+  var defY = ygSelectedYear() || String(DB.schoolInfo.academicYear || "").trim();
+  var name = window.prompt("ตั้งชื่อชุดตัดเกรดปีการศึกษา (เช่น คณิตศาสตร์ ป.4/1)", "");
   if (name === null) return;
+  var yTxt = window.prompt("ชุดนี้ของปีการศึกษาไหน (เช่น 2569)", defY);
+  if (yTxt === null) return;
+  var m = String(yTxt).match(/\d{4}/);
+  var year = m ? m[0] : defY;
   var id = uid("yr");
-  DB.yearRecords[id] = { id:id, name:name.trim() || "ปีการศึกษาใหม่", term1Id:"", term2Id:"" };
+  DB.yearRecords[id] = { id:id, name:name.trim() || "ปีการศึกษาใหม่", year:year, term1Id:"", term2Id:"" };
   DB.yearOrder.push(id);
   DB.currentYearId = id;
+  UI.ygYear = year;
+  syncYearFromRecord();
+  scheduleSave(); rerender();
+}
+/* ย้ายชุดตัดเกรดที่เปิดอยู่ไปปีการศึกษาอื่น */
+function moveYearRecordYear(){
+  var yr = getYearRecord();
+  if (!yr) return;
+  var txt = window.prompt("ย้ายชุด \"" + yr.name + "\" ไปปีการศึกษา (เช่น 2569)", yrYear(yr));
+  if (txt === null) return;
+  var m = String(txt).match(/\d{4}/);
+  if (!m){ window.alert("รูปแบบไม่ถูกต้อง — พิมพ์ปีการศึกษา 4 หลัก เช่น 2569"); return; }
+  yr.year = m[0];
+  UI.ygYear = yr.year;
+  syncYearFromRecord();
   scheduleSave(); rerender();
 }
 function switchYearRecord(id){
   if (!DB.yearRecords[id]) return;
   DB.currentYearId = id;
+  syncYearFromRecord();
   scheduleSave(); rerender();
 }
 function renameYearRecord(){
@@ -1378,6 +1493,7 @@ function deleteSubject(){
   delete DB.subjects[s.id];
   DB.order = DB.order.filter(function(x){ return x !== s.id; });
   DB.currentId = DB.order[0];
+  syncYearFromSubject();
   scheduleSave(); rerender();
 }
 
@@ -4414,10 +4530,34 @@ function histButtons(cls){
 }
 
 function renderSidebar(){
-  var subjOptions = DB.order.map(function(id){
-    var s = DB.subjects[id];
-    var sel = id === DB.currentId ? "selected" : "";
-    return '<option value="'+esc(id)+'" '+sel+'>'+esc(s.label)+'</option>';
+  /* รายการวิชา: จัดกลุ่มตามหมวด (ปีการศึกษา · ภาคเรียน) และกรองตามปี/เทอมที่เลือก (วิชาที่เปิดอยู่แสดงเสมอ) */
+  var allIds = DB.order.filter(function(id){ return DB.subjects[id]; });
+  var yearSet = {}, termSet = { "1":true, "2":true };
+  allIds.forEach(function(id){ var s = DB.subjects[id]; var y = subjYear(s); if (y) yearSet[y] = true; var t = subjTermNo(s); if (t) termSet[t] = true; });
+  var years = Object.keys(yearSet).sort(function(a,b){ return b.localeCompare(a); });
+  var terms = Object.keys(termSet).sort();
+  var visibleIds = allIds.filter(function(id){ return id === DB.currentId || matchesCatFilter(DB.subjects[id]); });
+  var groups = {}, groupKeys = [];
+  visibleIds.forEach(function(id){
+    var s = DB.subjects[id], k = subjYear(s) + "|" + subjTermNo(s);
+    if (!groups[k]){ groups[k] = []; groupKeys.push(k); }
+    groups[k].push(id);
+  });
+  groupKeys.sort(function(a,b){
+    var pa = a.split("|"), pb = b.split("|");
+    return pa[0] !== pb[0] ? pb[0].localeCompare(pa[0]) : pa[1].localeCompare(pb[1]);
+  });
+  var subjOptions = groupKeys.map(function(k){
+    var parts = k.split("|");
+    return '<optgroup label="'+esc(catLabel(parts[0], parts[1]))+'">' + groups[k].map(function(id){
+      return '<option value="'+esc(id)+'" '+(id === DB.currentId ? "selected" : "")+'>'+esc(DB.subjects[id].label)+'</option>';
+    }).join("") + '</optgroup>';
+  }).join("");
+  var yearOpts = '<option value="">ทุกปีการศึกษา</option>' + years.map(function(y){
+    return '<option value="'+esc(y)+'" '+(UI.filterYear === y ? "selected" : "")+'>ปีการศึกษา '+esc(y)+'</option>';
+  }).join("");
+  var termOpts = '<option value="">ทุกภาคเรียน</option>' + terms.map(function(t){
+    return '<option value="'+esc(t)+'" '+(UI.filterTerm === t ? "selected" : "")+'>ภาคเรียนที่ '+esc(t)+'</option>';
   }).join("");
 
   var navHtml = NAV_ITEMS.map(function(item){
@@ -4431,12 +4571,18 @@ function renderSidebar(){
       histButtons('hist-inline') +
     '</div></div>' +
     '<div class="subject-box">' +
+      '<label>หมวดวิชา (ปีการศึกษา / ภาคเรียน)</label>' +
+      '<div style="display:flex; gap:6px; margin-bottom:8px;">' +
+        '<select class="subject-select" style="flex:1; min-width:0;" onchange="setCatFilter(\'year\',this.value)">'+yearOpts+'</select>' +
+        '<select class="subject-select" style="flex:1; min-width:0;" onchange="setCatFilter(\'term\',this.value)">'+termOpts+'</select>' +
+      '</div>' +
       '<label>วิชาที่กำลังแก้ไข</label>' +
       '<select class="subject-select" onchange="switchSubject(this.value)">'+subjOptions+'</select>' +
       '<div class="subject-actions">' +
         '<button onclick="createSubject()">'+icon("plus",13)+' วิชาใหม่</button>' +
         '<button onclick="renameSubject()">เปลี่ยนชื่อ</button>' +
         '<button onclick="duplicateSubject()">คัดลอก</button>' +
+        '<button onclick="moveSubjectCategory()" title="ย้ายวิชานี้ไปปีการศึกษา/ภาคเรียนอื่น">ย้ายหมวด</button>' +
         '<button onclick="deleteSubject()" style="color:#E9B7A8;">ลบวิชานี้</button>' +
       '</div>' +
     '</div>' +
@@ -5967,14 +6113,34 @@ function __teacher_field(v){ updateSubjectField("teacher", v); }
 /* ================= หน้าตัดเกรดปีการศึกษา ================= */
 function renderYearGrade(){
   var yr = getYearRecord();
-  var yearOptions = DB.yearOrder.map(function(id){
+  var ygY = ygSelectedYear();
+  /* ปีที่เลือกได้ = ปีของชุดตัดเกรดที่มี + ปีของวิชาที่มี (ใหม่ไปเก่า) */
+  var ygYearSet = {};
+  DB.yearOrder.forEach(function(id){ if (DB.yearRecords[id]) ygYearSet[yrYear(DB.yearRecords[id])] = true; });
+  DB.order.forEach(function(id){ if (DB.subjects[id]) ygYearSet[subjYear(DB.subjects[id])] = true; });
+  if (ygY) ygYearSet[ygY] = true;
+  var ygYears = Object.keys(ygYearSet).filter(Boolean).sort(function(a,b){ return b.localeCompare(a); });
+  var ygYearSelect = '<select style="padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:15px; font-weight:600;" onchange="setYgYear(this.value)">' +
+    '<option value="">ทุกปีการศึกษา</option>' +
+    ygYears.map(function(y){ return '<option value="'+esc(y)+'" '+(ygY === y ? "selected" : "")+'>ปีการศึกษา '+esc(y)+'</option>'; }).join("") +
+    '</select>';
+  var yearIds = DB.yearOrder.filter(function(id){ return DB.yearRecords[id] && (!ygY || yrYear(DB.yearRecords[id]) === ygY || id === DB.currentYearId); });
+  var yearOptions = yearIds.map(function(id){
     var y = DB.yearRecords[id];
     var sel = id === DB.currentYearId ? "selected" : "";
-    return '<option value="'+esc(id)+'" '+sel+'>'+esc(y.name)+'</option>';
+    return '<option value="'+esc(id)+'" '+sel+'>'+esc(y.name)+(ygY ? "" : " ("+esc(yrYear(y))+")")+'</option>';
   }).join("");
-  var subjOptionsFor = function(selectedId){
+  var subjOptionsFor = function(selectedId, termNo){
     var blank = '<option value="">— เลือกวิชา/เทอม —</option>';
-    var opts = DB.order.map(function(id){
+    var recYear = yr ? yrYear(yr) : ygY;
+    var opts = DB.order.filter(function(id){
+      var s = DB.subjects[id];
+      if (!s) return false;
+      if (id === selectedId) return true;
+      if (recYear && subjYear(s) !== recYear) return false;          /* เฉพาะวิชาของปีการศึกษาเดียวกับชุดนี้ */
+      var t = subjTermNo(s);
+      return !t || !termNo || t === termNo;                           /* ช่องเทอม 1 โชว์วิชาเทอม 1 / ช่องเทอม 2 โชว์วิชาเทอม 2 (วิชาที่ไม่ระบุเทอมโชว์ทั้งสองช่อง) */
+    }).map(function(id){
       var s = DB.subjects[id];
       var sel = id === selectedId ? "selected" : "";
       var label = s.label + (s.term ? (" (ภาคเรียนที่ "+termNumberOnly(s.term)+")") : "");
@@ -5989,11 +6155,13 @@ function renderYearGrade(){
 
   var selectorRow =
     '<div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:16px;">' +
+      ygYearSelect +
       '<select style="padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:15px; min-width:220px;" onchange="switchYearRecord(this.value)">' +
-        (DB.yearOrder.length ? yearOptions : '<option value="">(ยังไม่มีชุดตัดเกรดปีการศึกษา)</option>') +
+        (yearIds.length ? yearOptions : '<option value="">(ยังไม่มีชุดตัดเกรดของปีนี้)</option>') +
       '</select>' +
       '<button class="btn-outline" onclick="createYearRecord()">'+icon("plus",15)+' สร้างชุดใหม่</button>' +
       (yr ? '<button class="btn-outline" onclick="renameYearRecord()">'+icon("pen",15)+' เปลี่ยนชื่อ</button>' : '') +
+      (yr ? '<button class="btn-outline" title="ย้ายชุดนี้ไปปีการศึกษาอื่น" onclick="moveYearRecordYear()">ย้ายปี</button>' : '') +
       (yr ? '<button class="btn-outline" style="border-color:var(--red); color:var(--red);" onclick="removeYearRecord(\''+yr.id+'\')">'+icon("trash",15)+' ลบชุดนี้</button>' : '') +
     '</div>';
 
@@ -6004,9 +6172,9 @@ function renderYearGrade(){
   var pickerRow =
     '<div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:16px;">' +
       '<div><div style="font-size:13px; color:var(--gray); margin-bottom:4px;">วิชาภาคเรียนที่ 1</div>' +
-        '<select style="padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:15px; min-width:260px;" onchange="updateYearRecordField(\'term1Id\',this.value)">' + subjOptionsFor(yr.term1Id) + '</select></div>' +
+        '<select style="padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:15px; min-width:260px;" onchange="updateYearRecordField(\'term1Id\',this.value)">' + subjOptionsFor(yr.term1Id, "1") + '</select></div>' +
       '<div><div style="font-size:13px; color:var(--gray); margin-bottom:4px;">วิชาภาคเรียนที่ 2</div>' +
-        '<select style="padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:15px; min-width:260px;" onchange="updateYearRecordField(\'term2Id\',this.value)">' + subjOptionsFor(yr.term2Id) + '</select></div>' +
+        '<select style="padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:15px; min-width:260px;" onchange="updateYearRecordField(\'term2Id\',this.value)">' + subjOptionsFor(yr.term2Id, "2") + '</select></div>' +
     '</div>';
 
   if (!yr.term1Id || !yr.term2Id){
