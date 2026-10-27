@@ -6161,7 +6161,7 @@ function renderYearGrade(){
       '</select>' +
       '<button class="btn-outline" onclick="createYearRecord()">'+icon("plus",15)+' สร้างชุดใหม่</button>' +
       (yr ? '<button class="btn-outline" onclick="renameYearRecord()">'+icon("pen",15)+' เปลี่ยนชื่อ</button>' : '') +
-      (yr ? '<button class="btn-outline" title="ย้ายชุดนี้ไปปีการศึกษาอื่น" onclick="moveYearRecordYear()">ย้ายปี</button>' : '') +
+      (yr ? '<button class="btn-outline" title="ย้ายชุดนี้ไปปีการศึกษาอื่น" onclick="moveYearRecordYear()">'+icon("calendar",15)+' ย้ายปี</button>' : '') +
       (yr ? '<button class="btn-outline" style="border-color:var(--red); color:var(--red);" onclick="removeYearRecord(\''+yr.id+'\')">'+icon("trash",15)+' ลบชุดนี้</button>' : '') +
     '</div>';
 
