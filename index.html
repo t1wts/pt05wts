@@ -1324,9 +1324,10 @@ function createSubject(){
     s.gradeLevel = isP ? (lv <= 3 ? GRADE_LEVEL_OPTIONS[0] : GRADE_LEVEL_OPTIONS[1]) : (lv <= 3 ? GRADE_LEVEL_OPTIONS[2] : GRADE_LEVEL_OPTIONS[3]);
     s.className = classLevelPrefix(s.gradeLevel) + cm[2] + (cm[3] || "");
     applyReadWritePreset(s);
-    nm = nm.replace(cm[0], "").replace(/\s+/g, " ").trim();
   }
-  s.subject = nm;
+  /* รายวิชา: เอาเฉพาะข้อความหน้าสุดก่อนถึงชั้น/ตัวเลข/เครื่องหมาย (เช่น "คอมพิวเตอร์ป.6/1_2/2569" -> "คอมพิวเตอร์") ถ้าไม่มีให้ปล่อยว่าง */
+  var sm = nm.match(/^(.*?)(?=\s*(?:[ปม]\.?\s*[1-6]|[0-9๐-๙]|[_\/\\|]|$))/);
+  s.subject = sm ? sm[1].replace(/[\s\-–—:,.]+$/, "").trim() : "";
   DB.subjects[s.id] = s;
   DB.order.push(s.id);
   DB.currentId = s.id;
