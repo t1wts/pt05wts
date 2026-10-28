@@ -816,11 +816,88 @@ var DEFAULT_DESIRABLE = [
   {id:"des7", name:"รักความเป็นไทย", max:3},
   {id:"des8", name:"มีจิตสาธารณะ", max:3}
 ];
-var DEFAULT_READWRITE = [
-  {id:"rw1", name:"การอ่าน", max:3},
-  {id:"rw2", name:"การคิดวิเคราะห์", max:3},
-  {id:"rw3", name:"การเขียน", max:3}
-];
+var OLD_DEFAULT_READWRITE_NAMES = ["การอ่าน","การคิดวิเคราะห์","การเขียน"];
+/* รายการประเมิน อ่าน เขียน คิดวิเคราะห์ แยกตามช่วงชั้น (ช่วงละ 5 รายการ) */
+var READWRITE_PRESETS = {
+  p13: [
+    "สามารถอ่านและหาประสบการณ์จากสื่อที่หลากหลาย",
+    "สามารถจับประเด็นสำคัญ ข้อเท็จจริง ความคิดเห็นเรื่องที่อ่าน",
+    "สามารถเปรียบเทียบแง่มุมต่าง ๆ เช่น ข้อดี ข้อเสีย ประโยชน์ โทษ ความเหมาะสม ความไม่เหมาะสม",
+    "สามารถแสดงความคิดเห็นต่อเรื่องที่อ่าน โดยมีเหตุผลประกอบ",
+    "สามารถถ่ายทอดความคิดเห็น ความรู้สึกจากเรื่องที่อ่าน โดยการเขียน"
+  ],
+  p46: [
+    "สามารถอ่านเพื่อหาข้อมูลสารสนเทศเสริมประสบการณ์จากสื่อประเภทต่าง ๆ",
+    "สามารถจับประเด็นสำคัญ เปรียบเทียบ เชื่อมโยงความเป็นเหตุเป็นผลจากเรื่องที่อ่าน",
+    "สามารถเชื่อมโยงความสัมพันธ์ของเรื่องราว เหตุการณ์ของเรื่องราวที่อ่าน",
+    "สามารถแสดงความคิดเห็นต่อเรื่องที่อ่าน โดยมีเหตุผลสนับสนุน",
+    "สามารถถ่ายทอดความเข้าใจ ความคิดเห็น คุณค่าจากเรื่องที่อ่าน โดยการเขียน"
+  ],
+  m13: [
+    "สามารถคัดสรรสื่อที่ต้องการอ่านเพื่อหาข้อมูลสารสนเทศได้ตามวัตถุประสงค์ สามารถสร้างความเข้าใจและประยุกต์ใช้ความรู้จากการอ่าน",
+    "สามารถจับประเด็นสำคัญและประเด็นสนับสนุน โต้แย้ง",
+    "สามารถวิเคราะห์ วิจารณ์ ความสมเหตุสมผล ความน่าเชื่อถือ ลำดับความเป็นไปได้ของเรื่องที่อ่าน",
+    "สามารถสรุปคุณค่า แนวคิด แง่คิดที่ได้จากการอ่าน",
+    "สามารถสรุป อภิปราย ขยายความ แสดงความคิดเห็น โต้แย้ง สนับสนุน โน้มน้าว โดยการเขียนสื่อสารในรูปแบบต่างๆ เช่น ผังความคิด เป็นต้น"
+  ],
+  m46: [
+    "สามารถอ่านเพื่อการศึกษา ค้นคว้า เพิ่มพูนความรู้ ประสบการณ์ และการประยุกต์ใช้ในชีวิตประจำวัน",
+    "สามารถจับประเด็นสำคัญ ลำดับเหตุการณ์ จากการอ่านสื่อที่มีความสลับซับซ้อน",
+    "สามารถวิเคราะห์ วิพากษ์ วิจารณ์ สิ่งที่ผู้เขียนต้องการสื่อสาร แสดงความคิดเห็นโต้แย้งหรือสนับสนุนอย่างมีเหตุผล และให้ข้อเสนอแนะในแง่มุมต่างๆ ได้",
+    "สามารถคาดการณ์ แนวโน้ม หรือทำนายเหตุการณ์จากเรื่องที่อ่าน ตลอดจนประยุกต์ใช้ในการตัดสินใจและแก้ปัญหาได้",
+    "สามารถเขียนถ่ายทอดความคิดเห็นเชิงสร้างสรรค์ รายงาน หรือบทความทางวิชาการได้อย่างถูกต้องตามหลักวิชา มีสำนวนภาษาที่สละสลวย"
+  ]
+};
+/* ช่วงชั้น -> รหัสช่วง และช่วงเลขชั้นที่ใส่ได้ */
+function gradeBandKey(gradeLevel){
+  var g = gradeLevel || "";
+  if (g.indexOf("ตอนต้น(ป.1-3)") >= 0) return "p13";
+  if (g.indexOf("ตอนปลาย(ป.4-6)") >= 0) return "p46";
+  if (g.indexOf("มัธยมศึกษาตอนปลาย") === 0) return "m46";
+  if (g.indexOf("มัธยมศึกษา") === 0) return "m13";
+  return null; /* ระดับ "ประถมศึกษา" แบบเดิม ไม่แยกช่วง */
+}
+var GRADE_BAND_RANGE = { p13:[1,3], p46:[4,6], m13:[1,3], m46:[4,6] };
+function readWritePresetItems(gradeLevel, existing){
+  var key = gradeBandKey(gradeLevel);
+  if (!key) return null;
+  var names = READWRITE_PRESETS[key];
+  var used = {};
+  (existing||[]).forEach(function(it){ used[it.id] = true; });
+  return names.map(function(n, i){
+    var id = existing && existing[i] ? existing[i].id : null;
+    if (!id){ var k = i+1; while (used["rw"+k]) k++; id = "rw"+k; used[id] = true; }
+    return { id:id, name:n, max:3 };
+  });
+}
+var DEFAULT_READWRITE = readWritePresetItems("มัธยมศึกษาตอนต้น", null);
+/* ใส่รายการประเมินตามช่วงชั้นให้วิชา โดยคงคะแนนเดิมตามลำดับข้อ */
+function applyReadWritePreset(s){
+  var items = readWritePresetItems(s.gradeLevel, s.readWrite);
+  if (!items) return;
+  var oldIds = (s.readWrite||[]).map(function(i){ return i.id; });
+  var newIds = items.map(function(i){ return i.id; });
+  s.readWrite = items;
+  if (!s.readWriteScores) s.readWriteScores = {};
+  Object.keys(s.readWriteScores).forEach(function(sid){
+    var m = s.readWriteScores[sid] || {};
+    oldIds.forEach(function(id){ if (newIds.indexOf(id) < 0) delete m[id]; });
+    newIds.forEach(function(id){ if (m[id] === undefined) m[id] = ""; });
+    s.readWriteScores[sid] = m;
+  });
+  (s.students||[]).forEach(function(st){
+    if (!s.readWriteScores[st.id]) s.readWriteScores[st.id] = emptyItemScores(items);
+  });
+}
+function readWriteIsPreset(s){
+  var key = gradeBandKey(s.gradeLevel);
+  if (!key) return true;
+  var names = READWRITE_PRESETS[key];
+  return s.readWrite.length === names.length && s.readWrite.every(function(it,i){ return it.name === names[i]; });
+}
+function readWriteIsOldDefault(s){
+  return s.readWrite && s.readWrite.length === 3 && s.readWrite.every(function(it,i){ return it.name === OLD_DEFAULT_READWRITE_NAMES[i]; });
+}
 /* กฎ 1 วัน = 1 ชั่วโมงเสมอ: วิชาที่เรียนวันละ 2 ชั่วโมง จะมี "วันเรียนซ้ำ" วันที่เดิม 2 แถวแทน
    (แถวละ 1 ชั่วโมง) แทนที่จะมีแถวเดียวที่ hours:2 เหมือนเดิม */
 var DEFAULT_SESSIONS = [
@@ -861,6 +938,27 @@ function currentAcademicYearBE(){
   return String(d.getMonth() < 4 ? be - 1 : be);
 }
 
+/* ภาคเรียนตามวันที่ในเครื่อง: พ.ค.-ต.ค. = ภาคเรียนที่ 1, พ.ย.-เม.ย. = ภาคเรียนที่ 2 (ครูแก้เองได้ที่หน้าปก) */
+function currentTermByClock(){
+  var m = new Date().getMonth(); /* 0=ม.ค. */
+  return (m >= 4 && m <= 9) ? "1" : "2";
+}
+/* เติมข้อมูลสถานศึกษาเริ่มต้นในช่องที่ว่าง (ข้อมูลเก่า/บัญชีใหม่จากคลาวด์) ส่วนปีการศึกษาคำนวณจากวันที่ในเครื่อง */
+function fillSchoolDefaults(db){
+  if (!db) return db;
+  if (!db.schoolInfo) db.schoolInfo = {};
+  var si = db.schoolInfo;
+  ["schoolName","district","province","affiliation","director"].forEach(function(k){
+    if (!String(si[k] || "").trim()) si[k] = DEFAULT_SCHOOL_INFO[k];
+  });
+  if (!String(si.academicYear || "").trim()) si.academicYear = currentAcademicYearBE();
+  Object.keys(db.subjects || {}).forEach(function(id){
+    var sj = db.subjects[id];
+    if (sj && !String(sj.term || "").trim()) sj.term = currentTermByClock();
+  });
+  return db;
+}
+
 function uid(prefix){ return (prefix||"id") + "_" + Math.random().toString(36).slice(2,9) + Date.now().toString(36).slice(-4); }
 function emptyItemScores(items){ var o={}; items.forEach(function(it){ o[it.id]=""; }); return o; }
 function emptyAttendance(sessions){ var o={}; sessions.forEach(function(s){ o[s.id]="present"; }); return o; }
@@ -875,7 +973,7 @@ function newEmptySubject(label){
     id: uid("subj"),
     label: label || "วิชาใหม่",
     courseMode: "normal",
-    subject:"", subjectCode:"", className:"", term:"", teacher:"",
+    subject:"", subjectCode:"", className:"", term:currentTermByClock(), teacher:"",
     gradeLevel:"มัธยมศึกษาตอนต้น", learningArea:"", learningStrand:"พื้นฐาน",
     teacherAdvisor:"", coverHours:"20", hoursPerWeek:"1",
     students:[], sessions:[], targetHours:18,
@@ -950,7 +1048,7 @@ function loadDB(){
         if (!parsed.yearRecords) parsed.yearRecords = {};
         if (!parsed.yearOrder) parsed.yearOrder = [];
         if (parsed.currentYearId === undefined) parsed.currentYearId = null;
-        return parsed;
+        return fillSchoolDefaults(parsed);
       }
     }
     var oldRaw = localStorage.getItem(OLD_STORAGE_KEY);
@@ -1013,7 +1111,22 @@ document.addEventListener("keydown", function(ev){
   else if ((key === "z" && ev.shiftKey) || key === "y"){ ev.preventDefault(); appRedo(); }
 }, true);
 
-function getSubj(){ return DB.subjects[DB.currentId]; }
+function getSubj(){
+  var s = DB.subjects[DB.currentId];
+  /* วิชาเดิมที่ยังใช้รายการอ่าน เขียน 3 ข้อแบบเก่าโดยไม่ได้แก้ไข -> เปลี่ยนเป็นรายการ 5 ข้อตามช่วงชั้น (ทำครั้งเดียว) */
+  if (s && !s.rwMigrated && s.readWrite){
+    s.rwMigrated = true;
+    if (readWriteIsOldDefault(s) && gradeBandKey(s.gradeLevel)) applyReadWritePreset(s);
+  }
+  return s;
+}
+function resetReadWritePreset(){
+  var s = getSubj();
+  if (!gradeBandKey(s.gradeLevel)){ alert("กรุณาเลือกระดับชั้นที่หน้าปกก่อน"); return; }
+  if (!confirm("เปลี่ยนรายการประเมินเป็นรายการมาตรฐานของระดับชั้นนี้ (5 รายการ)?\nคะแนนที่กรอกไว้จะคงอยู่ตามลำดับข้อ")) return;
+  applyReadWritePreset(s);
+  scheduleSave(); rerender();
+}
 
 function scheduleSave(){
   clearTimeout(saveTimer);
@@ -1197,12 +1310,23 @@ function createSubject(){
   if (name === null) return;
   var cur = getSubj();
   var defY = UI.filterYear || subjYear(cur) || String(DB.schoolInfo.academicYear || "");
-  var defT = UI.filterTerm || subjTermNo(cur) || "1";
+  var defT = UI.filterTerm || currentTermByClock();
   var catTxt = window.prompt("วิชานี้อยู่หมวดไหน — ปีการศึกษา/ภาคเรียน (เช่น 2569/1)\n(พิมพ์ปี/เทอมใหม่ได้เลย ระบบจะสร้างหมวดใหม่ให้อัตโนมัติ)", defY + "/" + defT);
   if (catTxt === null) return;
   var cat = parseCategoryInput(catTxt) || { year:defY, term:defT };
   var s = newEmptySubject(name.trim() || "วิชาใหม่");
   s.year = cat.year; s.term = cat.term;
+  /* ใส่ข้อมูลเริ่มต้นที่หน้าปก: ครูผู้สอน/ครูที่ปรึกษาจากวิชาที่เปิดอยู่, ชื่อวิชา และชั้นจากชื่อที่พิมพ์ (เช่น "คณิตศาสตร์ ม.3/1") */
+  if (cur){ s.teacher = cur.teacher || ""; s.teacherAdvisor = cur.teacherAdvisor || ""; s.learningStrand = cur.learningStrand || s.learningStrand; }
+  var nm = name.trim(), cm = nm.match(/(ป|ม)\.?\s*([1-6])(\/\d+)?/);
+  if (cm){
+    var lv = parseInt(cm[2],10), isP = cm[1] === "ป";
+    s.gradeLevel = isP ? (lv <= 3 ? GRADE_LEVEL_OPTIONS[0] : GRADE_LEVEL_OPTIONS[1]) : (lv <= 3 ? GRADE_LEVEL_OPTIONS[2] : GRADE_LEVEL_OPTIONS[3]);
+    s.className = classLevelPrefix(s.gradeLevel) + cm[2] + (cm[3] || "");
+    applyReadWritePreset(s);
+    nm = nm.replace(cm[0], "").replace(/\s+/g, " ").trim();
+  }
+  s.subject = nm;
   DB.subjects[s.id] = s;
   DB.order.push(s.id);
   DB.currentId = s.id;
@@ -4272,7 +4396,7 @@ function handleImportFile(input){
     try{
       var parsed = JSON.parse(reader.result);
       if (parsed && parsed.subjects && parsed.order && parsed.currentId){
-        DB = parsed;
+        DB = fillSchoolDefaults(parsed);
       } else if (parsed && parsed.subject !== undefined) {
         DB = migrateOld(parsed);
       } else {
@@ -4655,31 +4779,75 @@ function classNumberOnly(className){
   if (!className) return "";
   return String(className).replace(/^(ประถมศึกษาปีที่|มัธยมศึกษาปีที่)\s*/,"");
 }
+function classRangeText(gradeLevel){
+  var key = gradeBandKey(gradeLevel);
+  if (!key) return "";
+  var r = GRADE_BAND_RANGE[key];
+  return (key.charAt(0)==="p" ? "ป." : "ม.") + r[0] + "-" + r[1];
+}
+/* เลขชั้นต้องอยู่ในช่วงของระดับชั้น เช่น ป.1-3 ใส่ได้ 1,2,3 หรือ 1/2 */
+function classNumberValid(gradeLevel, num){
+  var key = gradeBandKey(gradeLevel);
+  if (!key || !num) return true;
+  var m = String(num).trim().match(/^(\d+)/);
+  if (!m) return false;
+  var n = parseInt(m[1],10), r = GRADE_BAND_RANGE[key];
+  return n >= r[0] && n <= r[1];
+}
 function classNumberField(gradeLevel, className){
   var prefix = classLevelPrefix(gradeLevel);
   var numPart = classNumberOnly(className);
-  return '<label class="field"><div class="field-label">ชั้น</div>' +
+  var rng = classRangeText(gradeLevel);
+  var ok = classNumberValid(gradeLevel, numPart);
+  var first = rng ? GRADE_BAND_RANGE[gradeBandKey(gradeLevel)][0] : 3;
+  return '<label class="field"><div class="field-label">ชั้น'+(rng?' <span style="font-weight:400; color:var(--muted);">(ใส่ได้เฉพาะ '+rng+')</span>':'')+'</div>' +
     '<div style="display:flex; gap:6px; align-items:stretch;">' +
       '<div style="padding:6px 8px; border:1px solid var(--line); border-radius:4px; font-size:15px; background:#F3F2ED; color:var(--ink); white-space:nowrap; display:flex; align-items:center;">'+esc(prefix)+'</div>' +
-      '<input id="f_classNumber" value="'+esc(numPart)+'" placeholder="เช่น 3 หรือ 3/1" style="flex:1; min-width:0;" oninput="updateClassNumber(this.value)"/>' +
-    '</div></label>';
+      '<input id="f_classNumber" value="'+esc(numPart)+'" placeholder="เช่น '+first+' หรือ '+first+'/1" style="flex:1; min-width:0;'+(ok?'':' border-color:var(--red);')+'" oninput="updateClassNumber(this.value)"/>' +
+    '</div>'+(ok?'':'<div class="class-range-warn" style="font-size:12px; color:var(--red); margin-top:3px;">ระดับนี้ใส่ได้เฉพาะชั้น '+esc(rng)+'</div>')+'</label>';
 }
 function updateClassNumber(v){
   var s = getSubj();
-  var prefix = classLevelPrefix(s.gradeLevel || GRADE_LEVEL_OPTIONS[1]);
+  var prefix = classLevelPrefix(s.gradeLevel || GRADE_LEVEL_OPTIONS[2]);
   s.className = prefix + v;
   scheduleSave();
+  var inp = document.getElementById("f_classNumber");
+  if (inp){
+    var ok = classNumberValid(s.gradeLevel, v);
+    inp.style.borderColor = ok ? "" : "var(--red)";
+    var lab = inp.closest("label"), w = lab && lab.querySelector(".class-range-warn");
+    if (!ok && !w && lab){
+      w = document.createElement("div"); w.className = "class-range-warn";
+      w.style.cssText = "font-size:12px; color:var(--red); margin-top:3px;";
+      w.textContent = "ระดับนี้ใส่ได้เฉพาะชั้น " + classRangeText(s.gradeLevel);
+      lab.appendChild(w);
+    } else if (ok && w){ w.remove(); }
+  }
 }
-// ระดับชั้นมีผลต่อคำนำหน้าของช่อง "ชั้น" ด้วย จึงต้องอัปเดต className ให้สอดคล้องกันทันทีที่เปลี่ยน
+// ระดับชั้นมีผลต่อคำนำหน้าของช่อง "ชั้น" และรายการอ่าน เขียน คิดวิเคราะห์ จึงอัปเดตให้สอดคล้องกันทันทีที่เปลี่ยน
 function updateGradeLevel(v){
   var s = getSubj();
   var oldNum = classNumberOnly(s.className);
+  var oldLevel = s.gradeLevel;
+  var needPreset = gradeBandKey(v) && gradeBandKey(v) !== gradeBandKey(oldLevel);
+  if (needPreset && !readWriteIsPreset(s) && !readWriteIsOldDefault(s) && !readWriteIsPresetOfAnyBand(s)){
+    if (!confirm("รายการประเมิน อ่าน เขียน คิดวิเคราะห์ ของวิชานี้ถูกแก้ไขไว้\nต้องการเปลี่ยนเป็นรายการมาตรฐานของระดับชั้นนี้หรือไม่?\n(คะแนนที่กรอกไว้จะคงอยู่ตามลำดับข้อ)")) needPreset = false;
+  }
   s.gradeLevel = v;
   s.className = classLevelPrefix(v) + oldNum;
+  if (needPreset) applyReadWritePreset(s);
   scheduleSave(); rerender();
 }
+function readWriteIsPresetOfAnyBand(s){
+  return Object.keys(READWRITE_PRESETS).some(function(k){
+    var names = READWRITE_PRESETS[k];
+    return s.readWrite.length === names.length && s.readWrite.every(function(it,i){ return it.name === names[i]; });
+  });
+}
 function gradeLevelSelect(value){
-  var opts = GRADE_LEVEL_OPTIONS.map(function(o){
+  var list = GRADE_LEVEL_OPTIONS.slice();
+  if (value && list.indexOf(value) < 0) list.unshift(value); /* ค่าเดิมที่ไม่อยู่ในรายการ (เช่น ประถมศึกษา) */
+  var opts = list.map(function(o){
     return '<option value="'+esc(o)+'" '+(String(value)===String(o)?"selected":"")+'>'+esc(o)+'</option>';
   }).join("");
   return '<label class="field"><div class="field-label">ระดับชั้น</div>' +
@@ -4692,7 +4860,7 @@ function renderTopFieldsBox(s){
   return '<div class="field-grid no-print">' +
     field("รายวิชา", s.subject, "__topfield_subject") +
     field("รหัสวิชา", s.subjectCode, "__topfield_subjectCode") +
-    classNumberField(s.gradeLevel || GRADE_LEVEL_OPTIONS[1], s.className) +
+    classNumberField(s.gradeLevel || GRADE_LEVEL_OPTIONS[2], s.className) +
     readonlyField("ภาคเรียน / ปีการศึกษา", "ภาคเรียนที่ "+(termNumberOnly(s.term)||"-")+" / ปีการศึกษา "+(info.academicYear||"-")) +
   '</div>';
 }
@@ -4700,14 +4868,14 @@ function renderTopFieldsBox(s){
 function __topfield_subject(v){ updateSubjectField("subject", v); }
 function __topfield_subjectCode(v){ updateSubjectField("subjectCode", v); }
 
-var GRADE_LEVEL_OPTIONS = ["ประถมศึกษา","ประถมศึกษาตอนต้น(ป.1-3)","ประถมศึกษาตอนปลาย(ป.4-6)","มัธยมศึกษาตอนต้น","มัธยมศึกษาตอนปลาย"];
+var GRADE_LEVEL_OPTIONS = ["ประถมศึกษาตอนต้น(ป.1-3)","ประถมศึกษาตอนปลาย(ป.4-6)","มัธยมศึกษาตอนต้น","มัธยมศึกษาตอนปลาย"];
 var LEARNING_STRAND_OPTIONS = ["พื้นฐาน","เพิ่มเติม"];
 var COVER_HOURS_OPTIONS = ["20","40","60","80","100"];
 var TERM_NUMBER_OPTIONS = ["1","2"];
 
 function renderCover(s, comp){
   var info = DB.schoolInfo;
-  var gradeLevel = s.gradeLevel || GRADE_LEVEL_OPTIONS[1];
+  var gradeLevel = s.gradeLevel || GRADE_LEVEL_OPTIONS[2];
   var learningStrand = s.learningStrand || LEARNING_STRAND_OPTIONS[0];
   var coverHours = String(s.coverHours || "20");
 
@@ -5926,13 +6094,14 @@ function renderReadWrite(s, comp){
 
   return '' +
   '<div class="section-title">การอ่าน เขียน คิดวิเคราะห์</div>' +
-  '<div class="section-sub">กำหนดรายการประเมินได้ 3-5 รายการตามความเหมาะสมของแต่ละวิชา แต่ละรายการเต็ม 3 คะแนน ตามเกณฑ์ 3 = ดีเยี่ยม, 2 = ดี, 1 = ผ่าน, 0 = ไม่ผ่าน ระบบคำนวณค่าเฉลี่ย (เต็ม 3) และระดับคุณภาพรวมให้อัตโนมัติ · พิมพ์เลข 0-3 ในช่องคะแนนแล้วระบบเลื่อนไปช่องถัดไปให้อัตโนมัติ (กด Enter ก็ได้) · ปุ่ม 0/1/2/3 ใต้ชื่อหัวข้อใช้ตั้งคะแนนนั้นให้ทุกคนในคอลัมน์เดียวได้ทันที · นักเรียนสถานะ ย้าย/มส จะถูกล็อกไม่ให้กรอกคะแนนโดยอัตโนมัติ</div>' +
+  '<div class="section-sub">รายการประเมิน 5 รายการตามช่วงชั้นที่เลือกไว้ที่หน้าปก (ป.1-3, ป.4-6, ม.1-3, ม.4-6) ปรับแก้หรือเพิ่ม/ลดได้ 3-5 รายการตามความเหมาะสม แต่ละรายการเต็ม 3 คะแนน ตามเกณฑ์ 3 = ดีเยี่ยม, 2 = ดี, 1 = ผ่าน, 0 = ไม่ผ่าน ระบบคำนวณค่าเฉลี่ย (เต็ม 3) และระดับคุณภาพรวมให้อัตโนมัติ · พิมพ์เลข 0-3 ในช่องคะแนนแล้วระบบเลื่อนไปช่องถัดไปให้อัตโนมัติ (กด Enter ก็ได้) · ปุ่ม 0/1/2/3 ใต้ชื่อหัวข้อใช้ตั้งคะแนนนั้นให้ทุกคนในคอลัมน์เดียวได้ทันที · นักเรียนสถานะ ย้าย/มส จะถูกล็อกไม่ให้กรอกคะแนนโดยอัตโนมัติ</div>' +
   '<div class="table-scroll"><table class="ptable readwrite-table" style="min-width:'+(400 + s.readWrite.length*132)+'px;"><thead><tr>' +
     '<th style="width:40px; position:sticky; left:0; z-index:3; background:#F1EEE6; box-shadow:2px 0 4px rgba(0,0,0,0.08);">เลขที่</th><th style="width:180px; position:sticky; left:40px; z-index:3; background:#F1EEE6; box-shadow:2px 0 4px rgba(0,0,0,0.08);">ชื่อ - นามสกุล</th>' + headerCols +
     '<th style="width:70px;">เฉลี่ย</th><th style="width:90px;">ระดับคุณภาพ</th>' +
   '</tr></thead><tbody>'+bodyRows+'</tbody></table></div>' +
   '<div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; align-items:center;">' +
     '<button class="btn-outline" onclick="addReadWriteItem()">'+icon("plus",15)+' เพิ่มรายการประเมิน</button>' +
+    (gradeBandKey(s.gradeLevel) && !readWriteIsPreset(s) ? '<button class="btn-outline" onclick="resetReadWritePreset()">'+icon("undo",15)+' คืนค่ารายการมาตรฐานตามช่วงชั้น</button>' : '') +
     '<button class="btn-outline" onclick="openScorePasteImport(\'readWrite\')">'+icon("upload",15)+' วางคะแนนจาก Excel</button>' +
     '<button class="btn-outline" style="border-color:#B3432E; color:#B3432E;" onclick="clearScores(\'readWrite\')">'+icon("trash",15,"#B3432E")+' ล้างคะแนนทั้งหมด</button>' +
     renderScorePasteUndoInline("readWrite") +
@@ -8425,7 +8594,7 @@ function split(db){ var m={}, meta={}; for(var k in db) if(k!=="subjects") meta[
   m.meta=JSON.stringify(meta); for(var id in db.subjects) m["s_"+id]=JSON.stringify(db.subjects[id]); return m; }
 function build(m){ var db=JSON.parse(m.meta); db.subjects={}; for(var k in m) if(k!=="meta") db.subjects[k.slice(2)]=JSON.parse(m[k]); return db; }
 function pull(){ return col().get().then(function(sn){ var m={}; sn.forEach(function(d){ m[d.id]=d.data().json; }); return m.meta?m:null; }); }
-function apply(m){ DB=build(m); synced=Object.assign({},m); undoHistory=[JSON.stringify(DB)]; undoPointer=0;
+function apply(m){ DB=fillSchoolDefaults(build(m)); synced=Object.assign({},m); undoHistory=[JSON.stringify(DB)]; undoPointer=0;
   try{localStorage.setItem(STORAGE_KEY,JSON.stringify(DB));}catch(e){} lastPull=Date.now(); rerender(); }
 
 function push(){ if(!uidNow||saving) return Promise.resolve(); saving=true; dirty=false; firstDirty=0; status("กำลังซิงก์...");
