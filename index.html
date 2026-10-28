@@ -972,7 +972,7 @@ function newEmptySubject(label){
   return {
     id: uid("subj"),
     label: label || "วิชาใหม่",
-    courseMode: "normal",
+    courseMode: "competency",
     subject:"", subjectCode:"", className:"", term:currentTermByClock(), teacher:"",
     gradeLevel:"มัธยมศึกษาตอนต้น", learningArea:"", learningStrand:"พื้นฐาน",
     teacherAdvisor:"", coverHours:"20", hoursPerWeek:"1",
@@ -6202,8 +6202,8 @@ function renderStructure(s, comp){
     '<label style="font-size:15px; font-weight:600; color:var(--ink);">โหมดหลักสูตร: ' +
       '<select style="margin-left:6px; padding:6px 10px; border:1px solid var(--line); border-radius:6px; font-size:14px; background:white;" ' +
         'onchange="updateSubjectField(\'courseMode\', this.value); rerender();">' +
-        '<option value="normal" '+(courseMode==="normal"?"selected":"")+'>1. หลักสูตรปกติ</option>' +
-        '<option value="competency" '+(courseMode==="competency"?"selected":"")+'>2. หลักสูตรสมรรถนะ</option>' +
+        '<option value="competency" '+(courseMode==="competency"?"selected":"")+'>1. หลักสูตรสมรรถนะ</option>' +
+        '<option value="normal" '+(courseMode==="normal"?"selected":"")+'>2. หลักสูตรปกติ</option>' +
       '</select>' +
     '</label>' +
     '<span style="font-size:13px; color:var(--gray);">' +
